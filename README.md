@@ -8,7 +8,7 @@ The library is **not** optimized for speed or efficiency. But if you're willing 
 
 One requirement I had was that the program had to be very easy to use. Point the program at a folder of PDF / DOCX / DOC / Markdown / TXT files, "index" (pre-chunk) them and then start asking questions — specifically the kinds of questions that similarity/top-k search cannot answer: abstractions that RAG might miss, discussions of ideas that don't use the obvious words, questions about what your documents *fail* to address, and corpus-wide sweeps ("consolidate every idea across these files").
 
-Every answer is cited, and the citations are checked rather than trusted. Each claim must carry a `[file § heading, p.N]` reference, and the assembler enforces two things: every cited evidence number must resolve to real evidence, and every claim-like sentence must carry a citation. Any sentence that fails either check is marked `[uncited]` in place — surfaced, never silently dropped. Separately, each finding's supporting quote is matched against the source markdown; a quote that can't be located is rendered `— unverified source`. (The heading and page inside a citation are still as the extraction model reported them — it's the quote match that proves the cited text actually exists in the file.)
+By default the answer is the **grounded hits**: for each relevant file, the verbatim quote that matched, its heading location, a page number when the source has one, and a verified flag — displayed directly, with no second model pass to re-describe them. Two things make a citation trustworthy. The quote is **snapped to the file**: the extraction model points at a passage, and the displayed quote is the exact substring taken from the source markdown, not the model's wording; a quote that can't be located is flagged `(unverified)` rather than shown as fact. And the **heading and page are system-derived** — the heading from where the quote actually sits in the document, the page from Docling's per-item page provenance — never taken from the model. Pass `--synthesize` to instead compose a single cited prose answer across the hits; that path additionally enforces that every claim-like sentence carries a citation resolving to real evidence, marking any failure `[uncited]` in place — surfaced, never silently dropped.
 
 The program, in its current state works, but it still needs work. Like most things AI, the prompt is important. It is an AI assisted generated program (Fable-5) so be forewarned, there's Fable AI slop. It was written for Linux and Windows and parts have been tested on both operating systems, and it probably works on OS X.
 
@@ -61,12 +61,12 @@ INDEX TIME (offline, LLM-free)
   source dir ──▶ Docling (pdf/docx/doc/md/txt → markdown      ──▶ SQLite catalog
                  + heading paths + page numbers + flags)           + markdown cache
 
-QUERY TIME
-  question ──▶ candidate selection           ──▶ per-file extraction ──▶ compile
-               • sweep: all parseable files      (whole-file raw text,    (numbered-evidence
-               • routed: inventory cards +        structured findings      citing, dedup,
-                 recall-biased LLM routing        with provenance,         thematic grouping,
-                                                  cached per question)     [uncited] enforcement)
+  question ──▶ candidate selection           ──▶ per-file extraction ──▶ display hits
+               • sweep: all parseable files      (whole-file raw text,    (verbatim quote
+               • routed: inventory cards +        structured findings,     snapped to source
+                 recall-biased LLM routing        quote snapped to         + heading + page;
+                                                  source, real heading     --synthesize for a
+                                                  + page, cached)          cited prose answer)
 ```
 
 Key properties:
@@ -149,6 +149,7 @@ corpusqa query "<question>" <dir>
         [--mode auto|route|sweep]              # auto: sweep <= threshold, else route
         [--relevance recall|balanced|strict]   # inclusion bar for extraction
         [--definition "..."]                   # judge relevance against YOUR definition
+        [--synthesize]                         # compose a cited prose answer (default: show hits)
         [--no-cache] [--yes] [--show-cost] [--all-files]
 corpusqa explain <file> <dir>                  # persisted verdicts + model reasoning for one file
 corpusqa-eval <dir> --pairs tests/eval/qa_pairs.yaml
@@ -177,8 +178,10 @@ report = asyncio.run(run_query(
     on_progress=lambda done, total: print(f"{done}/{total}"),
     confirm=lambda estimate: estimate.total_usd < 2.00,
 ))
-print(report.answer.text)        # cited answer body
-print(report.answer.sources)     # sources block
+# Default: the grounded hits (no second LLM call).
+from corpusqa.query.hits import render_hits
+print(render_hits("Which policies do not address third-party data handling?",
+                  report.findings))
 print(report.relevant_files)     # files extraction judged relevant
 print(report.actual_usage)       # per-task (tokens_in, tokens_out, usd)
 ```
@@ -188,6 +191,8 @@ Other entry points: `corpusqa.ingest.pipeline.run_index/run_status`, `corpusqa.q
 ## Evaluation harness
 
 `tests/eval/` a 22-document fixture corpus and 16 QA pairs covering every target query class (including the four hard ones: negative-presence, implicit-topic, analogical, argument-chain). `corpusqa-eval` reports routing recall/precision, forbidden-file hits, and citation validity per pair; `--fail-under` makes it a regression gate for prompt changes. Grow `qa_pairs.yaml` from your real queries — the pairs file is the contract.
+
+For routing at scale (the >150-file regime `auto` mode actually routes), `tests/eval/synthetic_corpus.py` generates a large corpus with a few planted relevant files, a single-overlap distractor, and the rest noise: `python -m tests.eval.synthetic_corpus /tmp/big --noise 210`. `tests/unit/test_routing_scale.py` indexes 214 such files and asserts the mock router filters them down to exactly the planted set (recall + precision). It is marked `slow` (real Docling conversions); run the fast suite with `pytest -m "not slow"`.
 
 ## Project structure
 

@@ -42,7 +42,7 @@ strict = true
 python_version = "3.11"
 
 [tool.pytest.ini_options]
-markers = ["slow: real Docling conversions"]
+markers = ["slow: real Docling conversions / large-corpus indexing"]
 
 [[tool.mypy.overrides]]
 module = ["litellm", "litellm.*", "docling", "docling.*", "docling_core", "docling_core.*", "docx", "docx.*"]
