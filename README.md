@@ -61,6 +61,7 @@ INDEX TIME (offline, LLM-free)
   source dir ──▶ Docling (pdf/docx/doc/md/txt → markdown      ──▶ SQLite catalog
                  + heading paths + page numbers + flags)           + markdown cache
 
+QUERY TIME (local or remote LLM)
   question ──▶ candidate selection           ──▶ per-file extraction ──▶ display hits
                • sweep: all parseable files      (whole-file raw text,    (verbatim quote
                • routed: inventory cards +        structured findings,     snapped to source
