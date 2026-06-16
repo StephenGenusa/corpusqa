@@ -1,0 +1,147 @@
+# Evaluation QA pairs over tests/eval/fixture_corpus.
+# expected_files: routing MUST include these (recall, the metric that matters).
+# forbidden_files: routing should exclude these (precision signal; a hit is
+#   reported but only fails the pair, never the run, unless --strict).
+# must_cite: substrings that must appear in the answer text or sources
+#   (full-query mode only).
+
+pairs:
+  - id: brainstorm_sweep            # archetype (a): consolidate ideas
+    question: >-
+      Which skills files relate to brainstorming, and what are all the
+      unique ideas they propose?
+    expected_files:
+      - skills/brainstorm_methods.md
+      - skills/brainstorm_remote.md
+    forbidden_files:
+      - kitchen/sourdough.md
+      - finance/budget_memo.txt
+    must_cite:
+      - skills/brainstorm_methods.md
+      - skills/brainstorm_remote.md
+
+  - id: custom_definition_topic     # archetype (b): user-defined topic
+    question: >-
+      Find where the topic of "sin in the flesh" is discussed.
+    definition: >-
+      Sin in the flesh means a physical principle of the human body that is
+      the cause of all its disease, death and suffering and the cause of
+      human thinking being led toward sinful thoughts.
+    expected_files:
+      - essays/sin_in_the_flesh.md
+    forbidden_files:
+      - kitchen/sourdough.md
+    must_cite:
+      - essays/sin_in_the_flesh.md
+
+  - id: single_doc_summary          # archetype (c): targeted summary
+    question: >-
+      Give me an executive summary of the field report document.
+    expected_files:
+      - reports/field_report.docx
+    must_cite:
+      - field_report.docx
+
+  - id: domain_survey               # archetype (d): SOTA across papers
+    question: >-
+      Review the computer vision notes from 2026 and list the leading
+      state-of-the-art techniques.
+    expected_files:
+      - papers/cv_transformer_notes.md
+      - papers/cv_diffusion_seg.md
+    forbidden_files:
+      - papers/nlp_rag_survey.md
+
+  - id: hydrology_fact
+    question: What happens to Sabine river flow in drought years?
+    expected_files:
+      - hydrology/sabine_flow.txt
+    forbidden_files:
+      - essays/grace_essay.md
+    must_cite:
+      - sabine_flow.txt
+
+  - id: cross_format
+    question: What does the orchard pest management PDF recommend?
+    expected_files:
+      - pdfs/orchard_ipm.pdf
+    must_cite:
+      - orchard_ipm.pdf
+
+  - id: meeting_decisions
+    question: What decisions were recorded in recent meetings?
+    expected_files:
+      - meetings/standup_2026_05.md
+    forbidden_files:
+      - papers/cv_transformer_notes.md
+
+  - id: negative_control            # nothing in corpus should match
+    question: What are the maintenance intervals for diesel generators?
+    expected_files: []
+    forbidden_files:
+      - skills/brainstorm_methods.md
+      - essays/sin_in_the_flesh.md
+
+  - id: definition_excludes_lookalike   # grace essay mentions body/practice
+    question: Which essays treat the body itself as a principle of corruption?
+    definition: >-
+      Only count essays asserting the body is itself a corrupting principle,
+      not essays about habit or practice.
+    expected_files:
+      - essays/sin_in_the_flesh.md
+    forbidden_files:
+      - essays/grace_essay.md
+
+  - id: aquifer_local
+    question: Where is aquifer recharge discussed and what is the concern?
+    expected_files:
+      - hydrology/aquifer_notes.md
+
+  - id: budget_lookup
+    question: What is the FY26 tooling spend cap?
+    expected_files:
+      - finance/budget_memo.txt
+    must_cite:
+      - budget_memo.txt
+
+  - id: interviewing_practice
+    question: What does the corpus say about conducting user interviews?
+    expected_files:
+      - skills/interviewing.md
+    forbidden_files:
+      - skills/brainstorm_methods.md
+
+  - id: negative_presence          # asks about what is ABSENT
+    question: >-
+      Which data handling policies do not address third-party data handling?
+    expected_files:
+      - policies/data_policy_internal.md
+    forbidden_files:
+      - policies/data_policy_full.md
+
+  - id: implicit_topic             # relevance depends on an unexplained assumption
+    question: >-
+      Find meeting notes where the presenter assumed the audience already
+      understood our pricing model without explaining it.
+    expected_files:
+      - meetings/q3_growth_review.md
+    forbidden_files:
+      - meetings/retro_q1.md
+
+  - id: analogical                 # parallel between specific event and category
+    question: >-
+      Does any document draw a parallel between our 2019 restructuring and
+      historical corporate turnarounds?
+    expected_files:
+      - strategy/restructuring_2019.md
+    must_cite:
+      - restructuring_2019.md
+
+  - id: argument_chain             # reasoning spans sections of one document
+    question: >-
+      What is the complete reasoning chain from market analysis to the
+      go/no-go decision in the Q3 expansion memo?
+    expected_files:
+      - strategy/q3_expansion_memo.md
+    must_cite:
+      - q3_expansion_memo.md

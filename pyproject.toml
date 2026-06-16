@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "corpusqa"
+version = "0.1.0"
+description = "Agentic question-answering over a directory of documents."
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "PyYAML>=6.0",
+    "litellm>=1.40",
+    "docling>=2.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.10", "types-PyYAML"]
+
+[project.scripts]
+corpusqa = "corpusqa.cli.main:main"
+corpusqa-eval = "corpusqa.evalkit:main"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "D", "UP", "ANN"]
+ignore = ["D203", "D213"]  # Google style: D211/D212 win these conflicts
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["D", "ANN"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+
+[tool.pytest.ini_options]
+markers = ["slow: real Docling conversions"]
+
+[[tool.mypy.overrides]]
+module = ["litellm", "litellm.*", "docling", "docling.*", "docling_core", "docling_core.*", "docx", "docx.*"]
+ignore_missing_imports = true

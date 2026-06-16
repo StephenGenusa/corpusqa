@@ -1,0 +1,7 @@
+# Q1 Retro
+
+## Went well
+Pairing on the parser. 
+
+## Improve
+Earlier scope cuts.

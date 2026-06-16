@@ -1,0 +1,4 @@
+# Carrizo-Wilcox Aquifer
+
+## Recharge
+Sandy outcrops recharge slowly; pumping exceeds recharge near Tyler.

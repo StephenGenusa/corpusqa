@@ -1,0 +1,4 @@
+# Sourdough Process
+
+## Steps
+Levain overnight, autolyse, four folds, cold retard, bake covered.

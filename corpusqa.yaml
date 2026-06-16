@@ -1,0 +1,41 @@
+# corpusqa example configuration.
+# Model strings are illustrative -- verify against current LiteLLM provider
+# docs (docs.litellm.ai) before use.
+
+providers:
+  ollama_local:
+    api_base: "http://localhost:11434"
+    max_concurrency: 2
+  openrouter:
+    api_key_env: OPENROUTER_API_KEY
+    max_concurrency: 8
+
+tasks:
+  catalog_summarize:
+    model: "ollama/gemma4:e4b"
+    provider: ollama_local
+    temperature: 0.2
+    max_tokens: 800
+    context_window: 8192
+  query_route:
+    model: "ollama/gemma4:e4b"
+    provider: ollama_local
+    max_tokens: 4096
+    context_window: 8192
+  extract:
+    model: "ollama/gemma4:e4b"
+    provider: ollama_local
+    max_tokens: 8192
+    context_window: 8192
+  synthesize:
+    model: "ollama/gemma4:e4b"
+    provider: ollama_local
+    max_tokens: 8192
+    context_window: 8192
+
+ingest:
+  ocr: "off"
+  chunk_target_tokens: 512
+
+budget:
+  confirm_above_usd: 1.00

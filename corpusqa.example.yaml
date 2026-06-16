@@ -1,0 +1,45 @@
+# corpusqa example configuration.
+# Model strings are illustrative -- verify against current LiteLLM provider
+# docs (docs.litellm.ai) before use.
+
+providers:
+  ollama_local:
+    api_base: "http://localhost:11434"
+    max_concurrency: 2
+  openrouter:
+    api_key_env: OPENROUTER_API_KEY
+    max_concurrency: 8
+
+tasks:
+  catalog_summarize:
+    model: "openrouter/anthropic/claude-sonnet-4.5"
+    provider: openrouter
+    temperature: 0.2
+    max_tokens: 800
+    context_window: 200000
+  query_route:
+    model: "openrouter/google/gemini-2.5-flash"
+    provider: openrouter
+    max_tokens: 4096
+    context_window: 1000000
+  extract:
+    model: "ollama/qwen3:14b"
+    provider: ollama_local
+    max_tokens: 2048
+    context_window: 32768
+    cost_per_mtok_in: 0.0
+    cost_per_mtok_out: 0.0
+    fallbacks: ["openrouter/deepseek/deepseek-chat"]
+  synthesize:
+    model: "openrouter/anthropic/claude-sonnet-4.5"
+    provider: openrouter
+    max_tokens: 8192
+    context_window: 200000
+
+ingest:
+  ocr: "off"
+  pdf_backend: "docling_parse"   # try "pypdfium" if large PDFs hit std::bad_alloc
+  chunk_target_tokens: 512
+
+budget:
+  confirm_above_usd: 1.00
