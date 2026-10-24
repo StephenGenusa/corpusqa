@@ -88,10 +88,14 @@ class QueryConfig(_StrictModel):
             remains available explicitly.
         eval_retention_runs: Evaluation-cache rows are pruned to the most
             recent N run_ids.
+        section_tokens: Most document tokens one extract call sees. Unset,
+            sections fill what the extract task's window allows; a larger
+            value is capped at that, with a warning.
     """
 
     sweep_threshold: int = Field(default=150, ge=0)
     eval_retention_runs: int = Field(default=20, ge=1)
+    section_tokens: int | None = Field(default=None, ge=256)
 
 
 class BudgetConfig(_StrictModel):

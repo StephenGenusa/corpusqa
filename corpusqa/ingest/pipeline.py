@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from corpusqa.catalog.store import CatalogStore, FileRow
 from corpusqa.config.schema import AppConfig
+from corpusqa.errors import IngestError
 from corpusqa.ingest import converter
 from corpusqa.ingest.discovery import (
     INDEX_DIR_NAME,
@@ -58,10 +59,19 @@ def index_paths(corpus_root: Path) -> tuple[Path, Path, Path]:
     return index_dir, index_dir / "catalog.db", index_dir / "md"
 
 
+def _corpus_rel_path(path: Path, corpus_root: Path) -> str:
+    """Returns ``path`` relative to the corpus root, as stored in the catalog."""
+    try:
+        return path.resolve().relative_to(corpus_root).as_posix()
+    except ValueError as exc:
+        raise IngestError(f"--force: {path} is outside the corpus") from exc
+
+
 def run_index(
     corpus_root: Path,
     config: AppConfig,
     force: list[Path] | None = None,
+    force_all: bool = False,
 ) -> IndexReport:
     """Runs the incremental index pipeline over a corpus directory.
 
@@ -69,23 +79,29 @@ def run_index(
         corpus_root: Directory of source documents.
         config: Validated application configuration.
         force: Source paths to reconvert even if unchanged.
+        force_all: Reconvert every file even if unchanged.
 
     Returns:
         A per-run report.
 
     Raises:
-        IngestError: Only for corpus-level failures (unreadable root);
-            per-file failures are captured in the report.
+        IngestError: Only for corpus-level failures (unreadable root, a
+            ``force`` path that is not a corpus file); per-file failures are
+            captured in the report.
     """
     corpus_root = corpus_root.resolve()
     _, db_path, cache_dir = index_paths(corpus_root)
-    forced = {p.resolve().relative_to(corpus_root).as_posix() for p in (force or [])}
+    forced = {_corpus_rel_path(p, corpus_root) for p in (force or [])}
     report = IndexReport()
 
     converter.check_converter_available()
     with CatalogStore(db_path) as store:
         known = store.known_files()
         found = discover(corpus_root, config.ingest.extensions, known)
+        present = {i.rel_path for i in found if i.drift is not DriftKind.DELETED}
+        unknown = sorted(forced - present)
+        if unknown:
+            raise IngestError(f"--force: not a corpus file: {', '.join(unknown)}")
 
         # Build the Docling converter at most once per run and reuse it for
         # every file: its model weights load on first use, so a per-file
@@ -113,7 +129,11 @@ def run_index(
             elif item.drift is DriftKind.MOVED:
                 store.update_rel_path(item.file_hash, item.rel_path)
                 report.moved += 1
-            elif item.drift is DriftKind.UNCHANGED and item.rel_path not in forced:
+            elif (
+                item.drift is DriftKind.UNCHANGED
+                and not force_all
+                and item.rel_path not in forced
+            ):
                 report.unchanged += 1
             else:  # NEW, MODIFIED, or forced
                 if item.drift is DriftKind.MODIFIED:

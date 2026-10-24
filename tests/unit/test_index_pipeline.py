@@ -13,6 +13,7 @@ import pytest
 
 from corpusqa.catalog.store import CatalogStore
 from corpusqa.config import load_config
+from corpusqa.errors import IngestError
 from corpusqa.ingest import converter, pipeline
 from corpusqa.ingest.pipeline import index_paths, run_index, run_status
 
@@ -92,3 +93,47 @@ def test_pdf_backend_reaches_converter(
     assert mock_converter and all(
         call["pdf_backend"] == "pypdfium" for call in mock_converter
     )
+
+
+def test_bare_force_reconverts_every_file(
+    tmp_path: Path, mock_converter: list[dict[str, object]]
+) -> None:
+    config = load_config(EXAMPLE)
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "a.md").write_text("# A\nalpha", encoding="utf-8")
+    (root / "b.md").write_text("# B\nbeta", encoding="utf-8")
+    run_index(root, config)
+    report = run_index(root, config, force_all=True)
+    assert report.parsed == 2 and report.unchanged == 0
+
+
+def test_force_path_not_in_the_corpus_is_an_error(
+    tmp_path: Path, mock_converter: list[dict[str, object]]
+) -> None:
+    config = load_config(EXAMPLE)
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "a.md").write_text("# A\nalpha", encoding="utf-8")
+    run_index(root, config)
+    with pytest.raises(IngestError, match="nope.md"):
+        run_index(root, config, force=[root / "nope.md"])
+    with pytest.raises(IngestError, match="outside.md"):
+        run_index(root, config, force=[tmp_path / "outside.md"])
+
+
+def test_cli_bare_force_means_every_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import corpusqa.cli.main as cli
+
+    seen: list[dict[str, object]] = []
+
+    def fake_run_index(_root: Path, _config: object, **kwargs: object) -> object:
+        seen.append(kwargs)
+        raise SystemExit(0)  # short-circuit; only the arguments matter
+
+    monkeypatch.setattr(cli, "run_index", fake_run_index)
+    with pytest.raises(SystemExit):
+        cli.main(["index", str(tmp_path), "--config", str(EXAMPLE), "--force"])
+    assert seen == [{"force": [], "force_all": True}]

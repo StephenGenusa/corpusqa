@@ -142,7 +142,7 @@ budget:
 ```bash
 # global: -v (call summaries on stderr)  -vv (full prompt/response capture in
 #         the run log under <dir>/.corpusqa/logs/)
-corpusqa index <dir> [--force FILE...]         # parse + cache (incremental, LLM-free); cards are built on the first routed query
+corpusqa index <dir> [--force [FILE...]]       # parse + cache (incremental, LLM-free); bare --force re-parses every file; cards are built on the first routed query
 corpusqa status <dir>                          # drift report + flagged files
 corpusqa estimate "<question>" <dir>           # candidates + projected cost, no spend
 corpusqa query "<question>" <dir>
@@ -150,6 +150,7 @@ corpusqa query "<question>" <dir>
         [--relevance recall|balanced|strict]   # inclusion bar for extraction
         [--definition "..."]                   # judge relevance against YOUR definition
         [--synthesize]                         # compose a cited prose answer (default: show hits)
+        [--section-tokens N]                   # most document tokens per extract call (default: fill the window)
         [--no-cache] [--yes] [--show-cost] [--all-files]
 corpusqa explain <file> <dir>                  # persisted verdicts + model reasoning for one file
 corpusqa-eval <dir> --pairs tests/eval/qa_pairs.yaml

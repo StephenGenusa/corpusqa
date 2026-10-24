@@ -17,6 +17,7 @@ from collections.abc import Callable, Iterator
 
 from pydantic import BaseModel, Field
 
+from corpusqa import splitting
 from corpusqa.config.schema import AppConfig, TaskName
 from corpusqa.errors import CorpusQAError
 from corpusqa.llm.structured import complete_structured, schema_instruction
@@ -123,7 +124,8 @@ def extraction_fingerprint() -> str:
     """Hashes every prompt text that shapes an extraction verdict.
 
     Part of the evaluation-cache key, so editing the extraction prompt, its
-    relevance instructions or the output schema invalidates cached verdicts
+    relevance instructions, the output schema or where sections fall
+    (``corpusqa.splitting.SPLITTER_VERSION``) invalidates cached verdicts
     instead of silently serving ones the current prompt never produced.
     """
     from corpusqa.prompts import extract as extract_prompt
@@ -134,6 +136,7 @@ def extraction_fingerprint() -> str:
         json.dumps(extract_prompt.RELEVANCE_INSTRUCTIONS, sort_keys=True),
         common_prompt.DEFINITION_BLOCK,
         schema_instruction(ExtractionResult),
+        f"splitter-v{splitting.SPLITTER_VERSION}",
     ]
     return hashlib.sha256("\x00".join(parts).encode()).hexdigest()[:16]
 
@@ -372,6 +375,35 @@ def _heading_path_at(markdown: str, offset: int) -> list[str]:
     return [stack[lvl] for lvl in sorted(stack)]
 
 
+def section_token_budget(config: AppConfig) -> int:
+    """Returns the most document tokens one extract call may carry.
+
+    The window ceiling is the context window minus fixed prompt scaffolding
+    (schema instruction + system + template + question) minus a reservation
+    for the model's OWN completion. Omitting the completion reservation lets
+    prompt+output exceed the window; local OpenAI-compatible servers then
+    often return EMPTY content, which surfaces downstream as
+    "Invalid JSON: EOF while parsing". ``query.section_tokens`` lowers the
+    budget below that ceiling; it never raises it.
+    """
+    extract_cfg = config.tasks[TaskName.EXTRACT]
+    ceiling = max(
+        extract_cfg.context_window - _PROMPT_OVERHEAD_TOKENS - extract_cfg.max_tokens,
+        _MIN_SECTION_TOKENS,
+    )
+    wanted = config.query.section_tokens
+    if wanted is None:
+        return ceiling
+    if wanted > ceiling:
+        _log.warning(
+            "query.section_tokens=%d exceeds what the extract window allows; using %d",
+            wanted,
+            ceiling,
+        )
+        return ceiling
+    return wanted
+
+
 def plan_sections(
     markdown: str,
     client: LLMTaskClient,
@@ -381,24 +413,12 @@ def plan_sections(
 
     Exposed so callers can size work (e.g. a progress total of total LLM
     calls) and pass the result straight into ``extract_file``, avoiding a
-    second split. Sizing rationale lives on
+    second split. Sizing rationale lives on ``section_token_budget`` and
     ``corpusqa.splitting.split_within_token_budget``.
     """
-    extract_cfg = config.tasks[TaskName.EXTRACT]
-    # Document-token budget = window minus fixed prompt scaffolding (schema
-    # instruction + system + template + question) minus a reservation for the
-    # model's OWN completion. Omitting the completion reservation lets
-    # prompt+output exceed the window; local OpenAI-compatible servers then
-    # often return EMPTY content, which surfaces downstream as
-    # "Invalid JSON: EOF while parsing". The reservation keeps the request
-    # inside the window.
-    doc_token_budget = max(
-        extract_cfg.context_window - _PROMPT_OVERHEAD_TOKENS - extract_cfg.max_tokens,
-        _MIN_SECTION_TOKENS,
-    )
     return split_within_token_budget(
         markdown,
-        doc_token_budget,
+        section_token_budget(config),
         lambda text: client.count_tokens(TaskName.EXTRACT, text),
     )
 

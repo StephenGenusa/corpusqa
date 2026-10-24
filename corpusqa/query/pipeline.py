@@ -30,6 +30,7 @@ from corpusqa.query.extractor import (
     extract_file,
     extraction_fingerprint,
     plan_sections,
+    section_token_budget,
 )
 from corpusqa.query.router import Candidate, route
 from corpusqa.query.synthesizer import CitedAnswer, synthesize
@@ -234,7 +235,7 @@ async def run_query(
 
     if all_files:
         mode = "sweep"
-    question_hash = _question_hash(question, definition, relevance)
+    question_hash = _question_hash(question, definition, relevance, config)
 
     with CatalogStore(db_path) as store:
         parseable = store.all_parseable_files()
@@ -312,15 +313,18 @@ async def run_query(
         )
 
 
-def _question_hash(question: str, definition: str | None, relevance: str) -> str:
-    """Evaluation-cache key for one question under the current prompt.
+def _question_hash(
+    question: str, definition: str | None, relevance: str, config: AppConfig
+) -> str:
+    """Evaluation-cache key for one question under the current setup.
 
     The extraction-prompt fingerprint is part of it: a prompt edit must not
-    keep serving verdicts the current prompt never produced.
+    keep serving verdicts the current prompt never produced. So is the
+    section size, since a verdict depends on how the file was sectioned.
     """
     return hashlib.sha256(
         f"{question}\x00{definition or ''}\x00{relevance}\x00"
-        f"{extraction_fingerprint()}".encode()
+        f"{extraction_fingerprint()}\x00{section_token_budget(config)}".encode()
     ).hexdigest()
 
 

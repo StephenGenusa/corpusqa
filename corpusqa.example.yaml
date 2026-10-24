@@ -36,6 +36,13 @@ tasks:
     max_tokens: 8192
     context_window: 200000
 
+query:
+  sweep_threshold: 150   # --mode auto sweeps at or below this many files
+  # Most document tokens one extract call sees. Unset: as many as the extract
+  # task's context_window allows after its max_tokens. Smaller sections mean
+  # more calls, each reading less; compare sizes with --section-tokens.
+  # section_tokens: 8000
+
 ingest:
   ocr: "off"
   pdf_backend: "docling_parse"   # try "pypdfium" if large PDFs hit std::bad_alloc

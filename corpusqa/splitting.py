@@ -15,6 +15,9 @@ from collections.abc import Callable
 # The real tokenizer is still consulted per piece to hard-split anything that
 # overflows regardless.
 CHARS_PER_TOKEN = 3
+# Bumped whenever a change alters where sections fall; part of the
+# evaluation-cache key, since a verdict depends on how the file was sectioned.
+SPLITTER_VERSION = 2
 
 
 def split_markdown(markdown: str, max_chars: int) -> list[str]:
@@ -22,7 +25,10 @@ def split_markdown(markdown: str, max_chars: int) -> list[str]:
 
     Splits at the shallowest heading level that exists, recursively; falls
     back to hard character splits only for heading-free oversize text.
-    Sections inherit their text verbatim (heading lines included), so
+    Adjacent pieces are then packed back together up to ``max_chars``:
+    PDF conversion can turn every running page header into a heading, and
+    one section per heading would leave the window mostly empty. Sections
+    inherit their text verbatim (heading lines included), so
     finding provenance is unchanged (design doc section 4.4).
 
     Args:
@@ -40,7 +46,11 @@ def split_markdown(markdown: str, max_chars: int) -> list[str]:
         if len(parts) > 1:
             out: list[str] = []
             for part in parts:
-                out.extend(split_markdown(part, max_chars))
+                for piece in split_markdown(part, max_chars):
+                    if out and len(out[-1]) + len(piece) <= max_chars:
+                        out[-1] += piece
+                    else:
+                        out.append(piece)
             return out
     return [markdown[i : i + max_chars] for i in range(0, len(markdown), max_chars)]
 

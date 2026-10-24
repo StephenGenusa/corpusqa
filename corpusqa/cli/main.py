@@ -12,9 +12,11 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
 
+from pydantic import ValidationError
+
 from corpusqa.config import load_config
-from corpusqa.config.schema import AppConfig
-from corpusqa.errors import BudgetExceededError, CorpusQAError
+from corpusqa.config.schema import AppConfig, QueryConfig
+from corpusqa.errors import BudgetExceededError, ConfigError, CorpusQAError
 from corpusqa.ingest.pipeline import index_paths, run_index, run_status
 from corpusqa.logging_setup import configure as configure_logging
 from corpusqa.query.budget import CostEstimate
@@ -31,6 +33,21 @@ EXIT_PARTIAL = 2
 _DEFAULT_CONFIG = Path("corpusqa.yaml")
 
 
+def _with_cli_overrides(config: AppConfig, args: argparse.Namespace) -> AppConfig:
+    """Applies CLI flags that override config, validated like the YAML."""
+    section_tokens = getattr(args, "section_tokens", None)
+    if section_tokens is None:
+        return config
+    try:
+        config.query = QueryConfig.model_validate(
+            {**config.query.model_dump(), "section_tokens": section_tokens}
+        )
+    except ValidationError as exc:
+        msg = exc.errors()[0]["msg"]
+        raise ConfigError(f"--section-tokens {section_tokens}: {msg}") from exc
+    return config
+
+
 def _build_parser() -> argparse.ArgumentParser:
     """Builds the CLI argument surface (design doc section 7)."""
     parser = argparse.ArgumentParser(prog="corpusqa")
@@ -40,7 +57,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p_index = sub.add_parser("index", help="parse and cache a directory (LLM-free)")
     p_index.add_argument("directory", type=Path)
     p_index.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
-    p_index.add_argument("--force", nargs="*", type=Path, default=[])
+    p_index.add_argument(
+        "--force",
+        nargs="*",
+        type=Path,
+        default=None,
+        help="reconvert these files even if unchanged; with no paths, every file",
+    )
 
     p_query = sub.add_parser("query", help="answer a question over the corpus")
     p_query.add_argument("question")
@@ -52,6 +75,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--relevance", choices=["recall", "balanced", "strict"], default="recall"
     )
     p_query.add_argument("--no-cache", action="store_true")
+    p_query.add_argument(
+        "--section-tokens",
+        type=int,
+        default=None,
+        help="most document tokens per extract call (overrides "
+        "query.section_tokens; capped at what the extract window allows)",
+    )
     p_query.add_argument("--definition", default=None)
     p_query.add_argument("--yes", action="store_true")
     p_query.add_argument("--show-cost", action="store_true")
@@ -100,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"log: {log_path}", file=sys.stderr)
 
     try:
-        config = load_config(args.config)
+        config = _with_cli_overrides(load_config(args.config), args)
     except CorpusQAError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USER_ERROR
@@ -333,7 +363,12 @@ def _cmd_estimate(args: argparse.Namespace, config: AppConfig) -> int:
 
 def _cmd_index(args: argparse.Namespace, config: AppConfig) -> int:
     """Runs the index pipeline and renders its report."""
-    report = run_index(args.directory, config, force=args.force)
+    report = run_index(
+        args.directory,
+        config,
+        force=args.force or [],
+        force_all=args.force == [],
+    )
     print(
         f"parsed {report.parsed}, moved {report.moved}, "
         f"deleted {report.deleted}, unchanged {report.unchanged}, "
