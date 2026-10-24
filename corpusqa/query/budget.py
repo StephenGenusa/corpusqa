@@ -122,15 +122,15 @@ def estimate_pass1(
     """Projects card-generation + routing cost before any pass-1 spend.
 
     Cataloging was historically the largest unguarded spend: a fresh corpus
-    sends every file's (truncated) markdown to the catalog model with no
+    sends every file's whole markdown to the catalog model with no
     gate. This estimate closes that hole; ``run_query``/``run_estimate``
     check it against the budget threshold BEFORE generating cards or
     routing.
 
     Args:
-        pending_card_tokens: Catalog-model token count of the (already
-            truncated-to-budget) markdown for each file still lacking a
-            card. Empty when the catalog is fully built.
+        pending_card_tokens: Catalog-model token count of the whole markdown
+            of each file still lacking a card (big files are chunked, not
+            truncated, so all of it is sent). Empty when the catalog is built.
         total_card_count: Number of cards routing will read (all parseable
             files), pending or not.
         config: Application configuration.

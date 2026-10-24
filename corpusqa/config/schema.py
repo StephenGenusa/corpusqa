@@ -105,7 +105,7 @@ class AppConfig(_StrictModel):
 
     Attributes:
         providers: Named provider endpoints.
-        tasks: One entry per ``TaskName`` member; all six are required so a
+        tasks: One entry per ``TaskName`` member; all four are required so a
             misconfigured task fails at startup, not mid-run.
         query: Query-pipeline settings.
         ingest: Ingest-time settings.

@@ -37,7 +37,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="count", default=0)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_index = sub.add_parser("index", help="parse, catalog, and embed a directory")
+    p_index = sub.add_parser("index", help="parse and cache a directory (LLM-free)")
     p_index.add_argument("directory", type=Path)
     p_index.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
     p_index.add_argument("--force", nargs="*", type=Path, default=[])

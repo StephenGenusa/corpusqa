@@ -192,7 +192,7 @@ Other entry points: `corpusqa.ingest.pipeline.run_index/run_status`, `corpusqa.q
 
 `tests/eval/` a 22-document fixture corpus and 16 QA pairs covering every target query class (including the four hard ones: negative-presence, implicit-topic, analogical, argument-chain). `corpusqa-eval` reports routing recall/precision, forbidden-file hits, and citation validity per pair; `--fail-under` makes it a regression gate for prompt changes. Grow `qa_pairs.yaml` from your real queries — the pairs file is the contract.
 
-For routing at scale (the >150-file regime `auto` mode actually routes), `tests/eval/synthetic_corpus.py` generates a large corpus with a few planted relevant files, a single-overlap distractor, and the rest noise: `python -m tests.eval.synthetic_corpus /tmp/big --noise 210`. `tests/unit/test_routing_scale.py` indexes 214 such files and asserts the mock router filters them down to exactly the planted set (recall + precision). It is marked `slow` (real Docling conversions); run the fast suite with `pytest -m "not slow"`.
+Tests marked `slow` run real Docling conversions; run the fast suite with `pytest -m "not slow"`.
 
 ## Project structure
 

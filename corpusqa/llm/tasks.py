@@ -1,7 +1,7 @@
 """Task-aliased LLM access over LiteLLM.
 
 This module is the single LiteLLM chokepoint (design doc section 4.5): all
-completions and embeddings anywhere in corpusqa go through ``LLMTaskClient``.
+completions anywhere in corpusqa go through ``LLMTaskClient``.
 That centralizes provider resolution, concurrency limits, retries/fallbacks,
 and cost accounting, and gives tests one seam to mock.
 """

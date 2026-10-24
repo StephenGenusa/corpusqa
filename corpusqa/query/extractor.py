@@ -37,9 +37,10 @@ class Finding(BaseModel):
             Derived by ``extract_file`` from where the quote actually occurs in
             the markdown -- NOT taken from the model, which cannot see the
             document's heading structure reliably and tends to invent it.
-        page_no: Source page. The markdown export carries no page information,
-            so this is left None rather than fabricated; real page numbers
-            require a conversion-time page map (not yet built).
+        page_no: Source page, from the page map built at index time (the
+            markdown export itself carries no page information). None when
+            the quote was not located or the source has no page provenance;
+            never taken from the model.
         quote_verified: Whether ``quote`` was located in the source markdown
             under robust normalization (unicode/ligature/quote/dash folding,
             de-hyphenation, markdown-decoration and whitespace/case folding).
