@@ -21,6 +21,10 @@ class TaskName(StrEnum):
     SYNTHESIZE = "synthesize"
 
 
+# Tasks that size document input per call and so honor max_input_tokens.
+INPUT_SIZED_TASKS = frozenset({TaskName.CATALOG_SUMMARIZE, TaskName.EXTRACT})
+
+
 class _StrictModel(BaseModel):
     """Base model forbidding unknown keys."""
 
@@ -51,6 +55,10 @@ class TaskConfig(_StrictModel):
         max_tokens: Completion token cap.
         context_window: Authoritative window size for the budgeter. LiteLLM's
             model map covers known models, but local/finetuned ones need this.
+        max_input_tokens: Most document tokens one call carries (catalog and
+            extract tasks only). A model can read less carefully than its
+            window holds, so this is tuned per model. Unset, calls fill the
+            window; a larger value is capped.
         cost_per_mtok_in: USD per million input tokens; overrides LiteLLM's
             cost map when set (local models: 0.0).
         cost_per_mtok_out: USD per million output tokens override.
@@ -62,6 +70,7 @@ class TaskConfig(_StrictModel):
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     max_tokens: int = Field(default=1024, ge=1)
     context_window: int = Field(default=32_768, ge=1024)
+    max_input_tokens: int | None = Field(default=None, ge=256)
     cost_per_mtok_in: float | None = Field(default=None, ge=0.0)
     cost_per_mtok_out: float | None = Field(default=None, ge=0.0)
     fallbacks: list[str] = Field(default_factory=list)
@@ -88,14 +97,10 @@ class QueryConfig(_StrictModel):
             remains available explicitly.
         eval_retention_runs: Evaluation-cache rows are pruned to the most
             recent N run_ids.
-        section_tokens: Most document tokens one extract call sees. Unset,
-            sections fill what the extract task's window allows; a larger
-            value is capped at that, with a warning.
     """
 
     sweep_threshold: int = Field(default=150, ge=0)
     eval_retention_runs: int = Field(default=20, ge=1)
-    section_tokens: int | None = Field(default=None, ge=256)
 
 
 class BudgetConfig(_StrictModel):
@@ -132,5 +137,11 @@ class AppConfig(_StrictModel):
             if task.provider not in self.providers:
                 raise ValueError(
                     f"task '{name.value}' references unknown provider '{task.provider}'"
+                )
+            if task.max_input_tokens is not None and name not in INPUT_SIZED_TASKS:
+                raise ValueError(
+                    f"task '{name.value}' does not use max_input_tokens; only "
+                    + ", ".join(sorted(t.value for t in INPUT_SIZED_TASKS))
+                    + " do"
                 )
         return self

@@ -6,8 +6,14 @@ text by the real tokenizer, not a chars-per-token guess.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Callable
+
+from corpusqa.config.schema import AppConfig, TaskName
+from corpusqa.llm.pricing import cost_map_window
+
+_log = logging.getLogger("corpusqa.query")
 
 # Conservative chars-per-token for the structural (heading-aware) split.
 # English prose averages ~4; dense or non-English text (scripture citation,
@@ -18,6 +24,65 @@ CHARS_PER_TOKEN = 3
 # Bumped whenever a change alters where sections fall; part of the
 # evaluation-cache key, since a verdict depends on how the file was sectioned.
 SPLITTER_VERSION = 3
+# Below this, a call carries too little document to be worth making.
+_MIN_INPUT_TOKENS = 1_000
+# Warnings already logged this process: input budgets are computed once per
+# file, and the same misconfiguration should be reported once.
+_warned: set[tuple[str, ...]] = set()
+
+
+def reset_input_budget_warnings() -> None:
+    """Forgets which input-budget warnings were logged (for tests)."""
+    _warned.clear()
+
+
+def _warn_once(key: tuple[str, ...], msg: str, *args: object) -> None:
+    if key not in _warned:
+        _warned.add(key)
+        _log.warning(msg, *args)
+
+
+def input_token_budget(config: AppConfig, task: TaskName, overhead: int) -> int:
+    """Returns the most document tokens one call of ``task`` may carry.
+
+    The ceiling is the task's window minus ``overhead`` (fixed prompt
+    scaffolding) minus a reservation for the model's OWN completion.
+    Omitting the completion reservation lets prompt+output exceed the window;
+    local OpenAI-compatible servers then often return EMPTY content, which
+    surfaces downstream as "Invalid JSON: EOF while parsing". The task's
+    ``max_input_tokens`` lowers the budget below that ceiling; it never
+    raises it.
+
+    Requests are sized for the primary model; a fallback whose known window
+    cannot hold them is reported.
+    """
+    cfg = config.tasks[task]
+    ceiling = max(cfg.context_window - overhead - cfg.max_tokens, _MIN_INPUT_TOKENS)
+    budget = ceiling
+    if cfg.max_input_tokens is not None:
+        budget = min(cfg.max_input_tokens, ceiling)
+        if cfg.max_input_tokens > ceiling:
+            _warn_once(
+                ("cap", task.value, str(cfg.max_input_tokens), str(ceiling)),
+                "tasks.%s.max_input_tokens=%d exceeds what its window allows; using %d",
+                task.value,
+                cfg.max_input_tokens,
+                ceiling,
+            )
+    for fallback in cfg.fallbacks:
+        window = cost_map_window(fallback)
+        if window is not None and window < budget + overhead:
+            _warn_once(
+                ("fallback", task.value, fallback, str(budget)),
+                "%s requests are sized for %s (up to %d input tokens); fallback "
+                "%s has a %d-token window and would truncate or fail",
+                task.value,
+                cfg.model,
+                budget + overhead,
+                fallback,
+                window,
+            )
+    return budget
 
 
 def _heading_pieces(markdown: str, max_chars: int) -> list[str]:

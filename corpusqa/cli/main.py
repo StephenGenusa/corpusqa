@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, NoReturn
 from pydantic import ValidationError
 
 from corpusqa.config import load_config
-from corpusqa.config.schema import AppConfig, QueryConfig
+from corpusqa.config.schema import AppConfig, TaskConfig, TaskName
 from corpusqa.errors import BudgetExceededError, ConfigError, CorpusQAError
 from corpusqa.ingest.pipeline import index_paths, run_index, run_status
 from corpusqa.logging_setup import configure as configure_logging
@@ -38,9 +38,10 @@ def _with_cli_overrides(config: AppConfig, args: argparse.Namespace) -> AppConfi
     section_tokens = getattr(args, "section_tokens", None)
     if section_tokens is None:
         return config
+    extract = config.tasks[TaskName.EXTRACT]
     try:
-        config.query = QueryConfig.model_validate(
-            {**config.query.model_dump(), "section_tokens": section_tokens}
+        config.tasks[TaskName.EXTRACT] = TaskConfig.model_validate(
+            {**extract.model_dump(), "max_input_tokens": section_tokens}
         )
     except ValidationError as exc:
         msg = exc.errors()[0]["msg"]
@@ -80,7 +81,7 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="most document tokens per extract call (overrides "
-        "query.section_tokens; capped at what the extract window allows)",
+        "tasks.extract.max_input_tokens; capped at what its window allows)",
     )
     p_query.add_argument("--definition", default=None)
     p_query.add_argument("--yes", action="store_true")

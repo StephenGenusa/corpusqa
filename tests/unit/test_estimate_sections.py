@@ -87,7 +87,7 @@ def _sweep(corpus: Path, config: AppConfig, replies: int) -> CostEstimate:
 def test_run_query_estimate_counts_the_planned_sections(tmp_path: Path) -> None:
     corpus = _book_corpus(tmp_path)
     config = _priced_config()
-    config.query.section_tokens = 1_000
+    config.tasks[TaskName.EXTRACT].max_input_tokens = 1_000
     sections = qp.plan_sections(BOOK, FakeClient({}), config)  # type: ignore[arg-type]
     assert len(sections) > 1
     est = _sweep(corpus, config, replies=len(sections))
@@ -109,7 +109,7 @@ def test_cached_files_add_nothing_to_the_estimate(tmp_path: Path) -> None:
 def test_run_estimate_counts_the_planned_sections(tmp_path: Path) -> None:
     corpus = _book_corpus(tmp_path)
     config = _priced_config()
-    config.query.section_tokens = 1_000
+    config.tasks[TaskName.EXTRACT].max_input_tokens = 1_000
     n = len(qp.plan_sections(BOOK, FakeClient({}), config))  # type: ignore[arg-type]
     decision = {"file_hash": "a" * 64, "include": True, "reason": "r"}
     fake = FakeClient(

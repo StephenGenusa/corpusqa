@@ -42,7 +42,11 @@ def _cfg() -> types.SimpleNamespace:
     return types.SimpleNamespace(
         tasks={
             TaskName.CATALOG_SUMMARIZE: types.SimpleNamespace(
-                context_window=2048, max_tokens=512, model="m"
+                context_window=2048,
+                max_tokens=512,
+                model="m",
+                max_input_tokens=None,
+                fallbacks=[],
             )
         }
     )

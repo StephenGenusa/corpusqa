@@ -150,7 +150,7 @@ corpusqa query "<question>" <dir>
         [--relevance recall|balanced|strict]   # inclusion bar for extraction
         [--definition "..."]                   # judge relevance against YOUR definition
         [--synthesize]                         # compose a cited prose answer (default: show hits)
-        [--section-tokens N]                   # most document tokens per extract call (default: fill the window)
+        [--section-tokens N]                   # override tasks.extract.max_input_tokens (default: fill the window)
         [--no-cache] [--yes] [--show-cost] [--all-files]
 corpusqa explain <file> <dir>                  # persisted verdicts + model reasoning for one file
 corpusqa-eval <dir> --pairs tests/eval/qa_pairs.yaml

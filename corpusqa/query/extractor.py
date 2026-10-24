@@ -142,7 +142,6 @@ def extraction_fingerprint() -> str:
     return hashlib.sha256("\x00".join(parts).encode()).hexdigest()[:16]
 
 
-_MIN_SECTION_TOKENS = 1_000
 _HEADING_LINE_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")
 # Surface characters folded together during quote matching. PDF-to-markdown
 # extraction routinely substitutes these for their ASCII equivalents, and the
@@ -378,32 +377,12 @@ def _heading_path_at(markdown: str, offset: int) -> list[str]:
 def section_token_budget(config: AppConfig) -> int:
     """Returns the most document tokens one extract call may carry.
 
-    The window ceiling is the context window minus fixed prompt scaffolding
-    (schema instruction + system + template + question) minus a reservation
-    for the model's OWN completion. Omitting the completion reservation lets
-    prompt+output exceed the window; local OpenAI-compatible servers then
-    often return EMPTY content, which surfaces downstream as
-    "Invalid JSON: EOF while parsing". ``query.section_tokens`` lowers the
-    budget below that ceiling; it never raises it.
+    See ``corpusqa.splitting.input_token_budget``; the extract task's
+    ``max_input_tokens`` is the per-model knob.
     """
-    extract_cfg = config.tasks[TaskName.EXTRACT]
-    ceiling = max(
-        extract_cfg.context_window
-        - EXTRACT_PROMPT_OVERHEAD_TOKENS
-        - extract_cfg.max_tokens,
-        _MIN_SECTION_TOKENS,
+    return splitting.input_token_budget(
+        config, TaskName.EXTRACT, EXTRACT_PROMPT_OVERHEAD_TOKENS
     )
-    wanted = config.query.section_tokens
-    if wanted is None:
-        return ceiling
-    if wanted > ceiling:
-        _log.warning(
-            "query.section_tokens=%d exceeds what the extract window allows; using %d",
-            wanted,
-            ceiling,
-        )
-        return ceiling
-    return wanted
 
 
 def plan_sections(

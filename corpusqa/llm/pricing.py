@@ -19,16 +19,35 @@ Rate = tuple[float, float]
 """USD per million tokens, ``(input, output)``."""
 
 
-def cost_map_rate(model: str) -> Rate | None:
-    """Looks a model up in LiteLLM's cost map.
+def _cost_map_keys(model: str) -> tuple[str, str, str]:
+    """Returns cost-map lookup keys, most specific first.
 
-    Tries the full string, then without the provider prefix, then the last
-    path segment (``openrouter/google/x`` -> ``google/x`` -> ``x``).
+    The full string, then without the provider prefix, then the last path
+    segment (``openrouter/google/x`` -> ``google/x`` -> ``x``).
+    """
+    return (model, model.split("/", 1)[-1], model.split("/")[-1])
+
+
+def cost_map_window(model: str) -> int | None:
+    """Looks up a model's input window in LiteLLM's cost map.
+
+    Returns:
+        ``max_input_tokens``, or None when the cost map does not know it.
+    """
+    for key in _cost_map_keys(model):
+        window = (litellm.model_cost.get(key) or {}).get("max_input_tokens")
+        if window:
+            return int(window)
+    return None
+
+
+def cost_map_rate(model: str) -> Rate | None:
+    """Looks a model up in LiteLLM's cost map (see ``_cost_map_keys``).
 
     Returns:
         The rate, or None when the cost map does not know the model.
     """
-    for key in (model, model.split("/", 1)[-1], model.split("/")[-1]):
+    for key in _cost_map_keys(model):
         info = litellm.model_cost.get(key)
         if info and ("input_cost_per_token" in info or "output_cost_per_token" in info):
             return (

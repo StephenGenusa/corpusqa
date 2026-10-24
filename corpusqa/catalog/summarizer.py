@@ -13,7 +13,7 @@ from corpusqa.config.schema import AppConfig, TaskName
 from corpusqa.errors import CorpusQAError
 from corpusqa.llm.structured import complete_structured
 from corpusqa.llm.tasks import LLMTaskClient
-from corpusqa.splitting import split_within_token_budget
+from corpusqa.splitting import input_token_budget, split_within_token_budget
 
 if TYPE_CHECKING:  # store imports CatalogCard from here; avoid a cycle
     from corpusqa.catalog.store import CatalogStore, FileRow
@@ -90,9 +90,14 @@ class CardReport:
 
 
 def card_token_budget(config: AppConfig) -> int:
-    """Returns the input-token budget for the document part of one card call."""
-    window = config.tasks[TaskName.CATALOG_SUMMARIZE].context_window
-    return max(window - _PROMPT_OVERHEAD_TOKENS, 1_000)
+    """Returns the input-token budget for the document part of one card call.
+
+    See ``corpusqa.splitting.input_token_budget``; the catalog task's
+    ``max_input_tokens`` is the per-model knob.
+    """
+    return input_token_budget(
+        config, TaskName.CATALOG_SUMMARIZE, _PROMPT_OVERHEAD_TOKENS
+    )
 
 
 def _dedup(items: list[str]) -> list[str]:

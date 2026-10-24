@@ -27,6 +27,10 @@ tasks:
     provider: ollama_local
     max_tokens: 2048
     context_window: 32768
+    # Most document tokens per call. Small models read less carefully than
+    # their window holds, so tune this per model (catalog_summarize takes it too);
+    # unset fills the window. Compare sizes with: query --section-tokens N
+    # max_input_tokens: 4000
     cost_per_mtok_in: 0.0
     cost_per_mtok_out: 0.0
     fallbacks: ["openrouter/deepseek/deepseek-chat"]
@@ -38,10 +42,6 @@ tasks:
 
 query:
   sweep_threshold: 150   # --mode auto sweeps at or below this many files
-  # Most document tokens one extract call sees. Unset: as many as the extract
-  # task's context_window allows after its max_tokens. Smaller sections mean
-  # more calls, each reading less; compare sizes with --section-tokens.
-  # section_tokens: 8000
 
 ingest:
   ocr: "off"
