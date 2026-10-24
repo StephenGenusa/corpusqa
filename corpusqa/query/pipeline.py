@@ -257,7 +257,7 @@ async def run_query(
         plan = _plan_pass2(
             candidates, store, cache_dir, client, config, question_hash, use_cache
         )
-        estimate = estimate_query(plan.file_tokens, config)
+        estimate = estimate_query(plan.section_tokens, config)
         _check_budget_gate(
             estimate, config, confirm, "extraction+synthesis", prior_usd=pass1_usd
         )
@@ -313,6 +313,11 @@ async def run_query(
         )
 
 
+def _token_counts(sections: list[str], client: LLMTaskClient) -> list[int]:
+    """Extract-model token count of each section."""
+    return [client.count_tokens(TaskName.EXTRACT, s) for s in sections]
+
+
 def _question_hash(
     question: str, definition: str | None, relevance: str, config: AppConfig
 ) -> str:
@@ -364,7 +369,8 @@ class _Pass2Plan:
 
     Attributes:
         markdowns: Cached markdown by file hash.
-        file_tokens: Extract-model token count per candidate, for the estimate.
+        section_tokens: Extract-model token count of each planned section,
+            per file still to extract, for the estimate.
         cached_eval: Cached verdict JSON by file hash (None when not cached).
         sections: Planned sections for each file that needs LLM work.
         page_maps: Page marks for each file that needs LLM work.
@@ -372,7 +378,7 @@ class _Pass2Plan:
     """
 
     markdowns: dict[str, str] = field(default_factory=dict)
-    file_tokens: list[int] = field(default_factory=list)
+    section_tokens: list[list[int]] = field(default_factory=list)
     cached_eval: dict[str, str | None] = field(default_factory=dict)
     sections: dict[str, list[str]] = field(default_factory=dict)
     page_maps: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
@@ -399,7 +405,6 @@ def _plan_pass2(
         h = cand.file.file_hash
         md = (cache_dir / f"{h}.md").read_text(encoding="utf-8")
         plan.markdowns[h] = md
-        plan.file_tokens.append(client.count_tokens(TaskName.EXTRACT, md))
         cached_json = (
             store.get_evaluation(question_hash, h, extract_model) if use_cache else None
         )
@@ -407,6 +412,7 @@ def _plan_pass2(
         if cached_json is None:
             sections = plan_sections(md, client, config)
             plan.sections[h] = sections
+            plan.section_tokens.append(_token_counts(sections, client))
             plan.total_calls += len(sections)
             plan.page_maps[h] = _load_page_map(cache_dir, h)
     return plan
@@ -568,9 +574,13 @@ async def run_estimate(
         candidates = await route(question, definition, store, client, config)
         _include_failed_cards(candidates, store.all_parseable_files(), card_report)
         tokens = [
-            client.count_tokens(
-                TaskName.EXTRACT,
-                (cache_dir / f"{c.file.file_hash}.md").read_text(encoding="utf-8"),
+            _token_counts(
+                plan_sections(
+                    (cache_dir / f"{c.file.file_hash}.md").read_text(encoding="utf-8"),
+                    client,
+                    config,
+                ),
+                client,
             )
             for c in candidates
         ]

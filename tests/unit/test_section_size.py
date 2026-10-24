@@ -43,8 +43,12 @@ def test_section_tokens_caps_section_size() -> None:
     config.query.section_tokens = 1_000
     fake = FakeClient({})
     sections = plan_sections(BOOK, fake, config)  # type: ignore[arg-type]
+    tokens = [fake.count_tokens(TaskName.EXTRACT, s) for s in sections]
     assert len(sections) > 1
-    assert all(fake.count_tokens(TaskName.EXTRACT, s) <= 1_000 for s in sections)
+    assert all(t <= 1_000 for t in tokens)
+    # packed by the real tokenizer: every section but the last is within one
+    # page (~100 tokens) of the cap, not short of it by a chars-per-token guess
+    assert all(t > 1_000 - 110 for t in tokens[:-1])
     assert "".join(sections) == BOOK
 
 

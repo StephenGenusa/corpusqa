@@ -19,7 +19,7 @@ def test_estimate_uses_per_task_overrides() -> None:
     # extract is local with 0.0 overrides; force synthesize to known rates
     config.tasks[TaskName.SYNTHESIZE].cost_per_mtok_in = 3.0
     config.tasks[TaskName.SYNTHESIZE].cost_per_mtok_out = 15.0
-    est = estimate_query([10_000, 30_000], config)
+    est = estimate_query([[10_000], [30_000]], config)
     assert est.candidate_files == 2
     assert est.per_task_usd["extract"] == 0.0
     # synth in = 2 * extract max_tokens (2048) = 4096; out = 8192

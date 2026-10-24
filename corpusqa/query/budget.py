@@ -14,6 +14,9 @@ from dataclasses import dataclass, field
 from corpusqa.config.schema import AppConfig, TaskName
 from corpusqa.llm.pricing import Rate, task_rate
 
+# Fixed scaffolding of one extract call (schema instruction + system +
+# template + question), shared by section sizing and the pass-2 estimate.
+EXTRACT_PROMPT_OVERHEAD_TOKENS = 2_000
 # Routing shard limits, shared by the router (actual sharding) and the
 # pass-1 estimator (projected shard count) so the two never disagree.
 ROUTE_SHARD_OVERHEAD_TOKENS = 2_000
@@ -46,7 +49,8 @@ class CostEstimate:
     Attributes:
         per_task_usd: Projected cost keyed by task name.
         total_usd: Sum across tasks.
-        candidate_files: Number of files entering pass 2.
+        candidate_files: Number of files pass 2 will read (files with a
+            cached verdict make no calls).
         total_input_tokens: Projected pass-2 + synthesize input tokens.
         unpriced_tasks: Tasks whose model has no known price; their cost is
             not in ``total_usd``, so the gate asks before spending.
@@ -72,17 +76,19 @@ def _unpriced(tasks: tuple[TaskName, ...], rates: list[Rate | None]) -> tuple[st
 
 
 def estimate_query(
-    file_tokens: list[int],
+    section_tokens: list[list[int]],
     config: AppConfig,
 ) -> CostEstimate:
     """Projects pass-2 + synthesize cost before any spend.
 
-    Output tokens are estimated at each task's ``max_tokens`` ceiling --
-    deliberately conservative: the estimate's job is to prevent surprise
-    spend, not to be flattering.
+    Every section is one extract call carrying the prompt scaffolding, and
+    output tokens are estimated at each task's ``max_tokens`` ceiling per
+    call -- deliberately conservative: the estimate's job is to prevent
+    surprise spend, not to be flattering.
 
     Args:
-        file_tokens: Extract-model token count per candidate file.
+        section_tokens: For each file pass 2 will read, the extract-model
+            token count of each of its sections.
         config: Application configuration.
 
     Returns:
@@ -95,8 +101,9 @@ def estimate_query(
     ex_in_rate, ex_out_rate = rates[0] or (0.0, 0.0)
     sy_in_rate, sy_out_rate = rates[1] or (0.0, 0.0)
 
-    extract_in = sum(file_tokens)
-    extract_out = extract_cfg.max_tokens * len(file_tokens)
+    calls = sum(len(sections) for sections in section_tokens)
+    extract_in = sum(map(sum, section_tokens)) + calls * EXTRACT_PROMPT_OVERHEAD_TOKENS
+    extract_out = extract_cfg.max_tokens * calls
     synth_in = extract_out  # findings feed the reduce step
     synth_out = synth_cfg.max_tokens
 
@@ -108,7 +115,7 @@ def estimate_query(
             TaskName.SYNTHESIZE.value: synth_usd,
         },
         total_usd=extract_usd + synth_usd,
-        candidate_files=len(file_tokens),
+        candidate_files=len(section_tokens),
         total_input_tokens=extract_in + synth_in,
         unpriced_tasks=_unpriced(tasks, rates),
     )

@@ -50,7 +50,7 @@ def _unknown_remote(config: AppConfig, task: TaskName) -> None:
 def test_unknown_remote_model_is_unpriced_in_estimate() -> None:
     config = _config()
     _unknown_remote(config, TaskName.SYNTHESIZE)
-    est = estimate_query([1_000], config)
+    est = estimate_query([[1_000]], config)
     assert est.unpriced_tasks == ("synthesize",)
 
 
@@ -62,7 +62,7 @@ def test_unknown_model_on_loopback_provider_is_free() -> None:
     cfg.provider = "lan"
     cfg.cost_per_mtok_in = None
     cfg.cost_per_mtok_out = None
-    est = estimate_query([1_000], config)
+    est = estimate_query([[1_000]], config)
     assert est.unpriced_tasks == ()
     assert est.per_task_usd["synthesize"] == 0.0
 
@@ -75,7 +75,7 @@ def test_unknown_model_on_remote_lan_host_is_not_assumed_free() -> None:
     cfg.provider = "lan"
     cfg.cost_per_mtok_in = None
     cfg.cost_per_mtok_out = None
-    assert estimate_query([1_000], config).unpriced_tasks == ("synthesize",)
+    assert estimate_query([[1_000]], config).unpriced_tasks == ("synthesize",)
 
 
 def test_pass1_estimate_reports_unpriced_catalog_model() -> None:
@@ -89,10 +89,10 @@ def test_pass1_estimate_reports_unpriced_catalog_model() -> None:
 
 def test_tiny_cost_is_not_rounded_to_zero() -> None:
     config = _config()
-    config.tasks[TaskName.EXTRACT].cost_per_mtok_in = 1.0
+    config.tasks[TaskName.EXTRACT].cost_per_mtok_in = 0.001
     config.tasks[TaskName.SYNTHESIZE].cost_per_mtok_in = 0.0
     config.tasks[TaskName.SYNTHESIZE].cost_per_mtok_out = 0.0
-    est = estimate_query([4], config)  # $0.000004: below 4-decimal rounding
+    est = estimate_query([[4]], config)  # ~$0.000002: below 4-decimal rounding
     assert est.total_usd > 0.0
 
 
@@ -255,7 +255,7 @@ def test_half_override_on_unknown_model_is_unpriced() -> None:
     config = _config()
     _unknown_remote(config, TaskName.SYNTHESIZE)
     config.tasks[TaskName.SYNTHESIZE].cost_per_mtok_in = 3.0
-    assert estimate_query([1_000], config).unpriced_tasks == ("synthesize",)
+    assert estimate_query([[1_000]], config).unpriced_tasks == ("synthesize",)
 
 
 def test_half_override_on_loopback_model_is_free_on_other_side() -> None:

@@ -12,24 +12,55 @@ from collections.abc import Callable
 # Conservative chars-per-token for the structural (heading-aware) split.
 # English prose averages ~4; dense or non-English text (scripture citation,
 # transliterations, code, tables) tokenizes below that, so 3 leaves margin.
-# The real tokenizer is still consulted per piece to hard-split anything that
-# overflows regardless.
+# The real tokenizer still decides what fits: it hard-splits anything that
+# overflows and packs sections up to the budget.
 CHARS_PER_TOKEN = 3
 # Bumped whenever a change alters where sections fall; part of the
 # evaluation-cache key, since a verdict depends on how the file was sectioned.
-SPLITTER_VERSION = 2
+SPLITTER_VERSION = 3
+
+
+def _heading_pieces(markdown: str, max_chars: int) -> list[str]:
+    """Cuts markdown at headings, recursively, into pieces under ``max_chars``.
+
+    Splits at the shallowest heading level that exists, recursing into any
+    piece still over ``max_chars``; falls back to hard character splits only
+    for heading-free oversize text.
+    """
+    if len(markdown) <= max_chars:
+        return [markdown]
+    for level in range(1, 7):
+        pattern = re.compile(rf"^(?={'#' * level}\s)", re.MULTILINE)
+        parts = [p for p in pattern.split(markdown) if p.strip()]
+        if len(parts) > 1:
+            return [
+                piece for part in parts for piece in _heading_pieces(part, max_chars)
+            ]
+    return [markdown[i : i + max_chars] for i in range(0, len(markdown), max_chars)]
+
+
+def _pack(pieces: list[str], fits: Callable[[str], bool]) -> list[str]:
+    """Joins adjacent pieces greedily while the joined text still ``fits``.
+
+    PDF conversion can turn every running page header into a heading, and
+    one section per heading would leave the window mostly empty.
+    """
+    out: list[str] = []
+    for piece in pieces:
+        if out and fits(out[-1] + piece):
+            out[-1] += piece
+        else:
+            out.append(piece)
+    return out
 
 
 def split_markdown(markdown: str, max_chars: int) -> list[str]:
     """Splits markdown into sections under ``max_chars``, heading-first.
 
-    Splits at the shallowest heading level that exists, recursively; falls
-    back to hard character splits only for heading-free oversize text.
-    Adjacent pieces are then packed back together up to ``max_chars``:
-    PDF conversion can turn every running page header into a heading, and
-    one section per heading would leave the window mostly empty. Sections
-    inherit their text verbatim (heading lines included), so
-    finding provenance is unchanged (design doc section 4.4).
+    Cuts at headings (see ``_heading_pieces``), then packs adjacent pieces
+    back together up to ``max_chars``. Sections inherit their text verbatim
+    (heading lines included), so finding provenance is unchanged (design doc
+    section 4.4).
 
     Args:
         markdown: The text to split.
@@ -38,21 +69,7 @@ def split_markdown(markdown: str, max_chars: int) -> list[str]:
     Returns:
         Ordered sections, each at most ``max_chars`` long.
     """
-    if len(markdown) <= max_chars:
-        return [markdown]
-    for level in range(1, 7):
-        pattern = re.compile(rf"^(?={'#' * level}\s)", re.MULTILINE)
-        parts = [p for p in pattern.split(markdown) if p.strip()]
-        if len(parts) > 1:
-            out: list[str] = []
-            for part in parts:
-                for piece in split_markdown(part, max_chars):
-                    if out and len(out[-1]) + len(piece) <= max_chars:
-                        out[-1] += piece
-                    else:
-                        out.append(piece)
-            return out
-    return [markdown[i : i + max_chars] for i in range(0, len(markdown), max_chars)]
+    return _pack(_heading_pieces(markdown, max_chars), lambda s: len(s) <= max_chars)
 
 
 def hard_split_to_tokens(
@@ -87,17 +104,16 @@ def split_within_token_budget(
 ) -> list[str]:
     """Splits markdown so every section fits ``token_budget`` real tokens.
 
-    First does the heading-aware structural split (via a char proxy), then
-    enforces the actual token budget per section, hard-splitting any that still
-    overflow. This decouples correctness from the chars-per-token estimate: the
-    estimate only affects how cleanly sections fall on heading boundaries, not
-    whether they fit the model window.
+    Cuts at headings (via a char proxy), hard-splits any piece that still
+    overflows under the real tokenizer, then packs adjacent pieces up to the
+    budget by the real tokenizer too. The char estimate only affects where
+    the heading cuts fall, not whether a section fits or how full it is.
     """
     char_budget = max(token_budget * CHARS_PER_TOKEN, 1)
-    sections: list[str] = []
-    for piece in split_markdown(markdown, char_budget):
+    pieces: list[str] = []
+    for piece in _heading_pieces(markdown, char_budget):
         if count_tokens(piece) <= token_budget:
-            sections.append(piece)
+            pieces.append(piece)
         else:
-            sections.extend(hard_split_to_tokens(piece, token_budget, count_tokens))
-    return sections
+            pieces.extend(hard_split_to_tokens(piece, token_budget, count_tokens))
+    return _pack(pieces, lambda s: count_tokens(s) <= token_budget)

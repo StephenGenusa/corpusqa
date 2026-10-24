@@ -57,11 +57,11 @@ def test_single_section_keeps_reasoning_both_verdicts() -> None:
 
 
 def test_multi_section_merge_relevant() -> None:
-    # force two sections: two top-level headings, text over the char budget
-    # is not needed -- shrink the budget via a tiny context window instead
+    # force two sections: a tiny window leaves a 1,000-token budget, and each
+    # half (~600 tokens) fits it alone but not together with the other
     config = load_config(EXAMPLE)
     config.tasks[TaskName.EXTRACT].context_window = 1024  # min allowed
-    markdown = "# A\n" + "a" * 1800 + "\n# B\n" + "b" * 1800
+    markdown = "# A\n" + "a" * 2400 + "\n# B\n" + "b" * 2400
     client = FakeClient(
         {
             TaskName.EXTRACT: [
@@ -82,7 +82,7 @@ def test_multi_section_merge_relevant() -> None:
 def test_multi_section_merge_irrelevant_uses_min_confidence() -> None:
     config = load_config(EXAMPLE)
     config.tasks[TaskName.EXTRACT].context_window = 1024
-    markdown = "# A\n" + "a" * 1800 + "\n# B\n" + "b" * 1800
+    markdown = "# A\n" + "a" * 2400 + "\n# B\n" + "b" * 2400
     client = FakeClient(
         {
             TaskName.EXTRACT: [

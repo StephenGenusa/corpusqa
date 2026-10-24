@@ -23,6 +23,7 @@ from corpusqa.errors import CorpusQAError
 from corpusqa.llm.structured import complete_structured, schema_instruction
 from corpusqa.llm.tasks import Completion, LLMTaskClient
 from corpusqa.prompts import common as common_prompt
+from corpusqa.query.budget import EXTRACT_PROMPT_OVERHEAD_TOKENS
 from corpusqa.splitting import split_within_token_budget
 
 _log = logging.getLogger("corpusqa.query")
@@ -141,7 +142,6 @@ def extraction_fingerprint() -> str:
     return hashlib.sha256("\x00".join(parts).encode()).hexdigest()[:16]
 
 
-_PROMPT_OVERHEAD_TOKENS = 2_000
 _MIN_SECTION_TOKENS = 1_000
 _HEADING_LINE_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")
 # Surface characters folded together during quote matching. PDF-to-markdown
@@ -388,7 +388,9 @@ def section_token_budget(config: AppConfig) -> int:
     """
     extract_cfg = config.tasks[TaskName.EXTRACT]
     ceiling = max(
-        extract_cfg.context_window - _PROMPT_OVERHEAD_TOKENS - extract_cfg.max_tokens,
+        extract_cfg.context_window
+        - EXTRACT_PROMPT_OVERHEAD_TOKENS
+        - extract_cfg.max_tokens,
         _MIN_SECTION_TOKENS,
     )
     wanted = config.query.section_tokens
