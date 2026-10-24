@@ -18,7 +18,7 @@ from pydantic import BaseModel, ValidationError
 
 from corpusqa.config.schema import TaskName
 from corpusqa.errors import StructuredOutputError
-from corpusqa.llm.tasks import LLMTaskClient
+from corpusqa.llm.tasks import Completion, LLMTaskClient
 
 _log = logging.getLogger("corpusqa.llm")
 
@@ -129,6 +129,7 @@ async def complete_structured(
     messages: list[dict[str, str]],
     output_model: type[T],
     on_truncated: Callable[[], None] | None = None,
+    on_completion: Callable[[Completion], None] | None = None,
 ) -> T:
     """Runs a completion and validates the output against a Pydantic model.
 
@@ -145,6 +146,8 @@ async def complete_structured(
         on_truncated: Called when the output was cut off and only its complete
             leading part was kept (a warning is logged either way), so the
             caller can treat the result as incomplete.
+        on_completion: Called with every completion made (including the repair
+            attempt), e.g. to learn which model served the result.
 
     Returns:
         The validated model instance.
@@ -164,6 +167,8 @@ async def complete_structured(
     completion = await client.complete(
         task, messages, response_format={"type": "json_object"}
     )
+    if on_completion is not None:
+        on_completion(completion)
     raw = _strip_fences(completion.text)
     if not raw:
         # An empty completion is not a JSON defect a repair turn can fix:
@@ -220,6 +225,8 @@ async def complete_structured(
     repaired = await client.complete(
         task, repair_messages, response_format={"type": "json_object"}
     )
+    if on_completion is not None:
+        on_completion(repaired)
     raw2 = _strip_fences(repaired.text)
     if not raw2:
         raise StructuredOutputError(

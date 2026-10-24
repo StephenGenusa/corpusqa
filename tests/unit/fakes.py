@@ -15,9 +15,11 @@ class FakeClient:
         self,
         scripts: dict[TaskName, list[str]],
         unpriced: set[TaskName] | None = None,
+        fallback: set[TaskName] | None = None,
     ) -> None:
         self._scripts = {k: list(v) for k, v in scripts.items()}
         self._unpriced = unpriced or set()
+        self._fallback = fallback or set()
         self.calls: dict[TaskName, list[list[dict[str, str]]]] = {}
         self._ledger: dict[TaskName, list[Completion]] = {}
 
@@ -36,6 +38,7 @@ class FakeClient:
             tokens_out=len(text) // 4,
             cost_usd=0.0 if task in self._unpriced else 0.001,
             priced=task not in self._unpriced,
+            fallback=task in self._fallback,
         )
         self._ledger.setdefault(task, []).append(completion)
         return completion

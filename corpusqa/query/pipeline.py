@@ -22,12 +22,13 @@ from corpusqa.catalog.summarizer import CardReport, generate_cards
 from corpusqa.config.schema import AppConfig, TaskName
 from corpusqa.errors import BudgetExceededError, CorpusQAError
 from corpusqa.ingest.pipeline import index_paths
-from corpusqa.llm.tasks import LLMTaskClient
+from corpusqa.llm.tasks import Completion, LLMTaskClient
 from corpusqa.query.budget import CostEstimate, estimate_pass1, estimate_query
 from corpusqa.query.extractor import (
     ExtractionResult,
     PartialExtractionError,
     extract_file,
+    extraction_fingerprint,
     plan_sections,
 )
 from corpusqa.query.router import Candidate, route
@@ -233,8 +234,11 @@ async def run_query(
 
     if all_files:
         mode = "sweep"
+    # The extraction-prompt fingerprint is in the key: a prompt edit must not
+    # keep serving verdicts the current prompt never produced.
     question_hash = hashlib.sha256(
-        f"{question}\x00{definition or ''}\x00{relevance}".encode()
+        f"{question}\x00{definition or ''}\x00{relevance}\x00"
+        f"{extraction_fingerprint()}".encode()
     ).hexdigest()
 
     with CatalogStore(db_path) as store:
@@ -312,6 +316,7 @@ async def run_query(
                     result = ExtractionResult.model_validate_json(cached_json)
                     cached += 1
                 else:
+                    fallback_served: list[Completion] = []
                     result = await extract_file(
                         question,
                         definition,
@@ -324,15 +329,21 @@ async def run_query(
                         sections=planned_sections[h],
                         on_section=functools.partial(_tick, h),
                         page_map=page_maps.get(h),
+                        on_completion=lambda c: (
+                            fallback_served.append(c) if c.fallback else None
+                        ),
                     )
-                    store.put_evaluation(
-                        run_id,
-                        question_hash,
-                        h,
-                        extract_model,
-                        result.model_dump_json(),
-                        question=question,
-                    )
+                    # The key names the primary model; a verdict a fallback
+                    # model produced must not be served as the primary's.
+                    if not fallback_served:
+                        store.put_evaluation(
+                            run_id,
+                            question_hash,
+                            h,
+                            extract_model,
+                            result.model_dump_json(),
+                            question=question,
+                        )
             except PartialExtractionError as exc:
                 # Show what survived, but report the file and never cache it.
                 failures.append((cand.file.rel_path, str(exc)))

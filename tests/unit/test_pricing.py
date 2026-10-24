@@ -267,3 +267,17 @@ def test_half_override_on_loopback_model_is_free_on_other_side() -> None:
     cfg.cost_per_mtok_in = 0.5
     cfg.cost_per_mtok_out = None
     assert task_rate(cfg, config.providers[cfg.provider]) == (0.5, 0.0)
+
+
+def test_completion_records_when_a_fallback_served_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _run_extract(monkeypatch, served="acme/no-such-fallback-for-tests")
+    assert [c.fallback for c in client._ledger[TaskName.EXTRACT]] == [True]
+
+
+def test_completion_from_primary_is_not_marked_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _run_extract(monkeypatch, served="ollama/qwen3:14b")
+    assert [c.fallback for c in client._ledger[TaskName.EXTRACT]] == [False]

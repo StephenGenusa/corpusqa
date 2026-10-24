@@ -8,6 +8,8 @@ in explicit delimiters and treated as data, not instructions.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 import unicodedata
@@ -17,8 +19,8 @@ from pydantic import BaseModel, Field
 
 from corpusqa.config.schema import AppConfig, TaskName
 from corpusqa.errors import CorpusQAError
-from corpusqa.llm.structured import complete_structured
-from corpusqa.llm.tasks import LLMTaskClient
+from corpusqa.llm.structured import _schema_instruction, complete_structured
+from corpusqa.llm.tasks import Completion, LLMTaskClient
 
 _log = logging.getLogger("corpusqa.query")
 
@@ -114,6 +116,29 @@ class PartialExtractionError(CorpusQAError):
         self.total = total
 
 
+def extraction_fingerprint() -> str:
+    """Hashes every prompt text that shapes an extraction verdict.
+
+    Part of the evaluation-cache key, so editing the extraction prompt, its
+    relevance instructions or the output schema invalidates cached verdicts
+    instead of silently serving ones the current prompt never produced.
+    """
+    from corpusqa.prompts import extract as extract_prompt
+
+    parts = [
+        extract_prompt.SYSTEM,
+        extract_prompt.TEMPLATE,
+        json.dumps(extract_prompt.RELEVANCE_INSTRUCTIONS, sort_keys=True),
+        _DEFINITION_BLOCK,
+        _schema_instruction(ExtractionResult),
+    ]
+    return hashlib.sha256("\x00".join(parts).encode()).hexdigest()[:16]
+
+
+_DEFINITION_BLOCK = (
+    "The user defines the topic as follows; judge relevance against "
+    "THIS definition, not the common meaning:\n{definition}\n\n"
+)
 _PROMPT_OVERHEAD_TOKENS = 2_000
 # Conservative chars-per-token for sizing the document portion of a section.
 # The previous value was an implicit 4 (English prose average); dense or
@@ -495,6 +520,7 @@ async def extract_file(
     sections: list[str] | None = None,
     on_section: Callable[[], None] | None = None,
     page_map: list[tuple[int, int]] | None = None,
+    on_completion: Callable[[Completion], None] | None = None,
 ) -> ExtractionResult:
     """Runs pass-2 extraction over one file (sectioned when oversize).
 
@@ -515,6 +541,8 @@ async def extract_file(
         page_map: Sorted ``(markdown_offset, page_no)`` marks from indexing;
             used to stamp each verified finding's source page. None when the
             source carries no page provenance (md/txt, scanned).
+        on_completion: Called with every LLM completion made for this file,
+            e.g. so the caller can tell whether a fallback model served it.
 
     Returns:
         The merged extraction result. ``relevant`` is True if any section
@@ -530,10 +558,7 @@ async def extract_file(
     if sections is None:
         sections = plan_sections(markdown, client, config)
     definition_block = (
-        f"The user defines the topic as follows; judge relevance against "
-        f"THIS definition, not the common meaning:\n{definition}\n\n"
-        if definition
-        else ""
+        _DEFINITION_BLOCK.format(definition=definition) if definition else ""
     )
 
     # Normalize the whole-file markdown once; every finding's quote is located
@@ -570,6 +595,7 @@ async def extract_file(
                 messages,
                 ExtractionResult,
                 on_truncated=lambda: truncation.append(None),
+                on_completion=on_completion,
             )
         except CorpusQAError as exc:
             # One section's structured-output failure (e.g. a truncated JSON

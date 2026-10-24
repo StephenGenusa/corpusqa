@@ -41,6 +41,8 @@ class Completion:
             'length' means the output hit max_tokens and may be truncated.
         priced: False when no price is known for the serving model, so
             ``cost_usd`` understates the real cost.
+        fallback: True when a fallback model, not the task's primary, served
+            the call.
     """
 
     text: str
@@ -50,6 +52,16 @@ class Completion:
     cost_usd: float
     finish_reason: str | None = None
     priced: bool = True
+    fallback: bool = False
+
+
+def _is_primary(task_cfg: TaskConfig, served: str) -> bool:
+    """True when ``served`` (``response.model``) is the task's primary model.
+
+    LiteLLM may report the model with or without its provider prefix.
+    """
+    primary = task_cfg.model
+    return served == primary or served == primary.split("/", 1)[-1]
 
 
 class LLMTaskClient:
@@ -127,9 +139,7 @@ class LLMTaskClient:
         ``response.model`` is the post-fallback model.
         """
         served = str(getattr(response, "model", "") or "")
-        primary = task_cfg.model
-        is_primary = served == primary or served == primary.split("/", 1)[-1]
-        if is_primary:
+        if _is_primary(task_cfg, served):
             rate = task_rate(task_cfg, self._config.providers[task_cfg.provider])
         else:
             try:
@@ -193,6 +203,9 @@ class LLMTaskClient:
             cost_usd=cost or 0.0,
             finish_reason=str(finish_reason) if finish_reason else None,
             priced=cost is not None,
+            fallback=not _is_primary(
+                task_cfg, str(getattr(response, "model", task_cfg.model) or "")
+            ),
         )
         self._ledger.setdefault(task, []).append(completion)
         if cost is None:
