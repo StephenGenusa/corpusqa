@@ -11,7 +11,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from corpusqa.config.schema import AppConfig, TaskConfig, TaskName
+from corpusqa.config.schema import AppConfig, TaskName
+from corpusqa.llm.pricing import Rate, task_rate
 
 # Routing shard limits, shared by the router (actual sharding) and the
 # pass-1 estimator (projected shard count) so the two never disagree.
@@ -47,35 +48,27 @@ class CostEstimate:
         total_usd: Sum across tasks.
         candidate_files: Number of files entering pass 2.
         total_input_tokens: Projected pass-2 + synthesize input tokens.
+        unpriced_tasks: Tasks whose model has no known price; their cost is
+            not in ``total_usd``, so the gate asks before spending.
     """
 
     per_task_usd: dict[str, float] = field(default_factory=dict)
     total_usd: float = 0.0
     candidate_files: int = 0
     total_input_tokens: int = 0
+    unpriced_tasks: tuple[str, ...] = ()
 
 
-def _rate(task_cfg: TaskConfig) -> tuple[float, float]:
-    """Returns (usd_per_mtok_in, usd_per_mtok_out) for a task.
+def _rates(config: AppConfig, tasks: tuple[TaskName, ...]) -> list[Rate | None]:
+    """Resolves each task's primary-model rate (None when unpriced)."""
+    return [
+        task_rate(config.tasks[t], config.providers[config.tasks[t].provider])
+        for t in tasks
+    ]
 
-    Per-task config overrides are authoritative; otherwise LiteLLM's cost
-    map is consulted; unknown models price at 0 (and the estimate says so
-    implicitly -- design doc risk #6 keeps overrides as the reliable path).
-    """
-    if task_cfg.cost_per_mtok_in is not None or task_cfg.cost_per_mtok_out is not None:
-        return (task_cfg.cost_per_mtok_in or 0.0, task_cfg.cost_per_mtok_out or 0.0)
-    try:
-        import litellm
 
-        info = litellm.model_cost.get(task_cfg.model) or litellm.model_cost.get(
-            task_cfg.model.split("/")[-1], {}
-        )
-        return (
-            float(info.get("input_cost_per_token", 0.0)) * 1_000_000,
-            float(info.get("output_cost_per_token", 0.0)) * 1_000_000,
-        )
-    except Exception:  # noqa: BLE001 -- pricing lookup is best-effort
-        return (0.0, 0.0)
+def _unpriced(tasks: tuple[TaskName, ...], rates: list[Rate | None]) -> tuple[str, ...]:
+    return tuple(t.value for t, r in zip(tasks, rates, strict=True) if r is None)
 
 
 def estimate_query(
@@ -97,8 +90,10 @@ def estimate_query(
     """
     extract_cfg = config.tasks[TaskName.EXTRACT]
     synth_cfg = config.tasks[TaskName.SYNTHESIZE]
-    ex_in_rate, ex_out_rate = _rate(extract_cfg)
-    sy_in_rate, sy_out_rate = _rate(synth_cfg)
+    tasks = (TaskName.EXTRACT, TaskName.SYNTHESIZE)
+    rates = _rates(config, tasks)
+    ex_in_rate, ex_out_rate = rates[0] or (0.0, 0.0)
+    sy_in_rate, sy_out_rate = rates[1] or (0.0, 0.0)
 
     extract_in = sum(file_tokens)
     extract_out = extract_cfg.max_tokens * len(file_tokens)
@@ -109,12 +104,13 @@ def estimate_query(
     synth_usd = (synth_in * sy_in_rate + synth_out * sy_out_rate) / 1_000_000
     return CostEstimate(
         per_task_usd={
-            TaskName.EXTRACT.value: round(extract_usd, 4),
-            TaskName.SYNTHESIZE.value: round(synth_usd, 4),
+            TaskName.EXTRACT.value: extract_usd,
+            TaskName.SYNTHESIZE.value: synth_usd,
         },
-        total_usd=round(extract_usd + synth_usd, 4),
+        total_usd=extract_usd + synth_usd,
         candidate_files=len(file_tokens),
         total_input_tokens=extract_in + synth_in,
+        unpriced_tasks=_unpriced(tasks, rates),
     )
 
 
@@ -147,8 +143,10 @@ def estimate_pass1(
     """
     catalog_cfg = config.tasks[TaskName.CATALOG_SUMMARIZE]
     route_cfg = config.tasks[TaskName.QUERY_ROUTE]
-    cat_in_rate, cat_out_rate = _rate(catalog_cfg)
-    rt_in_rate, rt_out_rate = _rate(route_cfg)
+    tasks = (TaskName.CATALOG_SUMMARIZE, TaskName.QUERY_ROUTE)
+    rates = _rates(config, tasks)
+    cat_in_rate, cat_out_rate = rates[0] or (0.0, 0.0)
+    rt_in_rate, rt_out_rate = rates[1] or (0.0, 0.0)
 
     catalog_in = sum(pending_card_tokens)
     catalog_out = catalog_cfg.max_tokens * len(pending_card_tokens)
@@ -168,10 +166,11 @@ def estimate_pass1(
     route_usd = (route_in * rt_in_rate + route_out * rt_out_rate) / 1_000_000
     return CostEstimate(
         per_task_usd={
-            TaskName.CATALOG_SUMMARIZE.value: round(catalog_usd, 4),
-            TaskName.QUERY_ROUTE.value: round(route_usd, 4),
+            TaskName.CATALOG_SUMMARIZE.value: catalog_usd,
+            TaskName.QUERY_ROUTE.value: route_usd,
         },
-        total_usd=round(catalog_usd + route_usd, 4),
+        total_usd=catalog_usd + route_usd,
         candidate_files=len(pending_card_tokens),
         total_input_tokens=catalog_in + route_in,
+        unpriced_tasks=_unpriced(tasks, rates),
     )

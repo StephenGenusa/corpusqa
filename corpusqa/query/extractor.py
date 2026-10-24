@@ -8,9 +8,9 @@ in explicit delimiters and treated as data, not instructions.
 
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
-import logging
 from collections.abc import Callable
 
 from pydantic import BaseModel, Field
@@ -71,6 +71,32 @@ class ExtractionResult(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
 
 
+class PartialExtractionError(CorpusQAError):
+    """Some sections of a file failed; the verdict covers only the rest.
+
+    Carries the merged result of the sections that succeeded so callers can
+    still show those findings. The file must be reported as failed and the
+    result never cached: the passage that mattered may be in a lost section.
+
+    Attributes:
+        result: Merged extraction over the sections that succeeded.
+        skipped: Number of sections that failed.
+        total: Number of sections in the file.
+    """
+
+    def __init__(
+        self, result: ExtractionResult, skipped: int, total: int, last_error: str
+    ) -> None:
+        """Initializes the error with the partial result and failure counts."""
+        super().__init__(
+            f"{skipped} of {total} sections failed extraction; the verdict "
+            f"covers only the rest (last error: {last_error})"
+        )
+        self.result = result
+        self.skipped = skipped
+        self.total = total
+
+
 _PROMPT_OVERHEAD_TOKENS = 2_000
 # Conservative chars-per-token for sizing the document portion of a section.
 # The previous value was an implicit 4 (English prose average); dense or
@@ -88,10 +114,21 @@ _WS_RE = re.compile(r"\s+")
 # extraction routinely substitutes these for their ASCII equivalents, and the
 # model quotes the clean reading; folding them lets a genuine quote verify.
 _PUNCT_FOLD = {
-    "\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201b": "'",  # single quotes
-    "\u201c": '"', "\u201d": '"', "\u201e": '"', "\u201f": '"',  # double quotes
-    "\u2013": "-", "\u2014": "-", "\u2015": "-", "\u2212": "-",  # dashes/minus
-    "\u00a0": " ", "\u2007": " ", "\u202f": " ",                  # nbsp variants
+    "\u2018": "'",
+    "\u2019": "'",
+    "\u201a": "'",
+    "\u201b": "'",  # single quotes
+    "\u201c": '"',
+    "\u201d": '"',
+    "\u201e": '"',
+    "\u201f": '"',  # double quotes
+    "\u2013": "-",
+    "\u2014": "-",
+    "\u2015": "-",
+    "\u2212": "-",  # dashes/minus
+    "\u00a0": " ",
+    "\u2007": " ",
+    "\u202f": " ",  # nbsp variants
 }
 # Markdown decoration the model omits from quoted text.
 _DECORATION = set("*_`")
@@ -515,8 +552,7 @@ async def extract_file(
         except CorpusQAError as exc:
             # One section's structured-output failure (e.g. a truncated JSON
             # the salvage could not recover) must not discard the whole file's
-            # findings. Skip it and keep going; only an all-sections failure is
-            # fatal.
+            # findings. Keep going, then report the file as partial below.
             section_failures += 1
             last_error = exc
             _log.warning(
@@ -530,6 +566,9 @@ async def extract_file(
         for finding in result.findings:
             spans = _match_spans(finding.quote, norm_source, source_map)
             finding.quote_verified = bool(spans)
+            # Never show model-supplied provenance: an unlocated quote has no
+            # system-derived heading or page, so it carries neither.
+            finding.heading_path = []
             finding.page_no = None
             if spans:
                 # Snap the displayed quote to the EXACT source text the model
@@ -553,14 +592,18 @@ async def extract_file(
         return ExtractionResult(
             file_hash=file_hash, relevant=False, confidence=0.0, reasoning=""
         )
+    merged = _merge_sections(file_hash, section_results)
     if section_failures:
-        _log.warning(
-            "extract: %s completed with %d/%d sections skipped",
-            rel_path,
-            section_failures,
-            len(sections),
+        raise PartialExtractionError(
+            merged, section_failures, len(sections), str(last_error)
         )
+    return merged
 
+
+def _merge_sections(
+    file_hash: str, section_results: list[ExtractionResult]
+) -> ExtractionResult:
+    """Merges per-section verdicts: relevant if any section is relevant."""
     relevant_results = [r for r in section_results if r.relevant]
     if relevant_results:
         return ExtractionResult(

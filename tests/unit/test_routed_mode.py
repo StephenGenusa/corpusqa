@@ -88,7 +88,7 @@ def test_routed_recall_bias_includes_omitted_file(
     while a file it explicitly excludes is not."""
     corpus = _corpus(tmp_path)
     h = _hashes(corpus)
-    planted, noise = h["planted.md"], h["noise.txt"]
+    noise = h["noise.txt"]
 
     fake = FakeClient(
         {
@@ -97,7 +97,11 @@ def test_routed_recall_bias_includes_omitted_file(
                 # planted OMITTED (no decision) -> recall bias includes it;
                 # noise EXPLICITLY excluded -> stays out.
                 json.dumps(
-                    {"decisions": [{"file_hash": noise, "include": False, "reason": "no"}]}
+                    {
+                        "decisions": [
+                            {"file_hash": noise, "include": False, "reason": "no"}
+                        ]
+                    }
                 )
             ],
             TaskName.EXTRACT: [_extraction(True)],  # single candidate: planted
@@ -106,7 +110,13 @@ def test_routed_recall_bias_includes_omitted_file(
     monkeypatch.setattr(qp, "LLMTaskClient", lambda _c: fake)
 
     report = asyncio.run(
-        qp.run_query(corpus, "where is the fox?", load_config(EXAMPLE), mode="route")
+        qp.run_query(
+            corpus,
+            "where is the fox?",
+            load_config(EXAMPLE),
+            mode="route",
+            confirm=lambda _e: True,
+        )
     )
     routed = {c.file.rel_path for c in report.candidates}
     assert routed == {"planted.md"}  # omitted relevant rescued; excluded stays out
@@ -144,7 +154,13 @@ def test_routed_full_read_corrects_false_positive(
     monkeypatch.setattr(qp, "LLMTaskClient", lambda _c: fake)
 
     report = asyncio.run(
-        qp.run_query(corpus, "unrelated question", load_config(EXAMPLE), mode="route")
+        qp.run_query(
+            corpus,
+            "unrelated question",
+            load_config(EXAMPLE),
+            mode="route",
+            confirm=lambda _e: True,
+        )
     )
     routed = {c.file.rel_path for c in report.candidates}
     assert routed == {"planted.md"}  # router included it

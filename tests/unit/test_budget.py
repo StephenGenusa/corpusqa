@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from pathlib import Path
 
+import pytest
+
 from corpusqa.config import load_config
 from corpusqa.config.schema import TaskName
 from corpusqa.query.budget import estimate_pass1, estimate_query, route_shard_limits
@@ -22,7 +24,7 @@ def test_estimate_uses_per_task_overrides() -> None:
     assert est.per_task_usd["extract"] == 0.0
     # synth in = 2 * extract max_tokens (2048) = 4096; out = 8192
     expected = (4096 * 3.0 + 8192 * 15.0) / 1_000_000
-    assert est.per_task_usd["synthesize"] == round(expected, 4)
+    assert est.per_task_usd["synthesize"] == pytest.approx(expected)
     assert abs(est.total_usd - expected) < 1e-3
 
 
@@ -47,8 +49,8 @@ def test_estimate_pass1_covers_cataloging_and_routing() -> None:
     route_out = config.tasks[TaskName.QUERY_ROUTE].max_tokens * shards
     expected_route = (route_in * 0.3 + route_out * 2.5) / 1_000_000
 
-    assert est.per_task_usd["catalog_summarize"] == round(expected_cat, 4)
-    assert est.per_task_usd["query_route"] == round(expected_route, 4)
+    assert est.per_task_usd["catalog_summarize"] == pytest.approx(expected_cat)
+    assert est.per_task_usd["query_route"] == pytest.approx(expected_route)
     assert abs(est.total_usd - (expected_cat + expected_route)) < 1e-3
     assert est.candidate_files == 2
     assert est.total_input_tokens == 40_000 + route_in

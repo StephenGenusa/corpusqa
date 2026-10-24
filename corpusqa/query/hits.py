@@ -13,6 +13,7 @@ evidence; see ``synthesizer.synthesize``.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from corpusqa.query.extractor import ExtractionResult, _normalize_for_match
@@ -102,7 +103,7 @@ def render_hits(
         empty_relevant = _relevant_without_hits(results, set())
         if empty_relevant:
             lines = [
-                f"No quotable hits for: \"{question}\"",
+                f'No quotable hits for: "{question}"',
                 "",
                 "These files were judged relevant but produced no verbatim "
                 "findings (try --relevance balanced, or --synthesize for a "
@@ -110,7 +111,7 @@ def render_hits(
             ]
             lines += [f"  {p}" for p in sorted(empty_relevant)]
             return "\n".join(lines)
-        return f"No hits found for: \"{question}\""
+        return f'No hits found for: "{question}"'
 
     files = _ordered_unique(h.rel_path for h in hits)
     unverified = sum(1 for h in hits if not h.verified)
@@ -123,7 +124,7 @@ def render_hits(
     fplural = "s" if len(files) != 1 else ""
     lines = [
         f"{len(hits)} hit{plural} across {len(files)} file{fplural}{quality} "
-        f"for: \"{question}\"",
+        f'for: "{question}"',
     ]
 
     by_file = _group_by_file(hits)
@@ -148,7 +149,7 @@ def render_hits(
     return "\n".join(lines)
 
 
-def _ordered_unique(items) -> list[str]:
+def _ordered_unique(items: Iterable[str]) -> list[str]:
     """Preserves first-seen order while removing duplicates."""
     out: list[str] = []
     for item in items:

@@ -202,13 +202,13 @@ async def run_pairs(
                     if sweep
                     else {c.file.rel_path for c in report.candidates}
                 )
+                answer = report.answer
+                assert answer is not None  # synthesize_answer=True always sets it
                 result = score_routing(pair, paths)
-                result = score_citations(
-                    result, pair, report.answer.text, report.answer.sources
-                )
-                total = report.answer.resolved_cites + report.answer.unresolved_cites
+                result = score_citations(result, pair, answer.text, answer.sources)
+                total = answer.resolved_cites + answer.unresolved_cites
                 if total:
-                    result.cite_validity = report.answer.resolved_cites / total
+                    result.cite_validity = answer.resolved_cites / total
             else:
                 candidates, _ = await qp.run_estimate(
                     corpus_root,
@@ -371,6 +371,10 @@ class MockTaskClient:
             t: (sum(c.tokens_in for c in cs), sum(c.tokens_out for c in cs), 0.0)
             for t, cs in self._ledger.items()
         }
+
+    def unpriced_by_task(self) -> dict[TaskName, int]:
+        """The mock is free by definition: nothing is unpriced."""
+        return {}
 
 
 def main(argv: list[str] | None = None) -> int:

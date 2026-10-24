@@ -31,7 +31,10 @@ def _spans(quote: str, source: str = _SOURCE):
 
 def test_noisy_quote_snaps_to_exact_source() -> None:
     # Wrong case, smart-ish punctuation, and an extra word at each edge.
-    noisy = "ZZZ a PHYSICAL principle of the animal nature, defiling and corrupting the whole man and"
+    noisy = (
+        "ZZZ a PHYSICAL principle of the animal nature, "
+        "defiling and corrupting the whole man and"
+    )
     spans = _spans(noisy)
     assert spans
     snapped = _SNAP_SEPARATOR.join(_SOURCE[s:e] for s, e in spans)
@@ -40,7 +43,9 @@ def test_noisy_quote_snaps_to_exact_source() -> None:
 
 
 def test_ellipsis_quote_joins_exact_spans() -> None:
-    quote = "a physical principle of the animal nature ... bringing forth death in the body"
+    quote = (
+        "a physical principle of the animal nature ... bringing forth death in the body"
+    )
     spans = _spans(quote)
     assert len(spans) == 2
     joined = _SNAP_SEPARATOR.join(_SOURCE[s:e] for s, e in spans)
@@ -78,7 +83,12 @@ def test_build_page_map_marks_page_changes() -> None:
         iterate_items=lambda: [
             (item("The orchard pest plan begins here with the program scope.", 1), 0),
             (item("Dormant oil is applied before bud break to smother mites.", 2), 0),
-            (item("Harvest interval restrictions are listed in the appendix here.", 3), 0),
+            (
+                item(
+                    "Harvest interval restrictions are listed in the appendix here.", 3
+                ),
+                0,
+            ),
         ]
     )
     marks = _build_page_map(doc, md)
@@ -88,7 +98,10 @@ def test_build_page_map_marks_page_changes() -> None:
 
 
 def test_extract_file_stamps_real_heading_and_page() -> None:
-    quote = "a physical principle of the animal nature, defiling and corrupting the whole man"
+    quote = (
+        "a physical principle of the animal nature, "
+        "defiling and corrupting the whole man"
+    )
 
     class FakeClient:
         def count_tokens(self, task: TaskName, text: str) -> int:
@@ -111,7 +124,10 @@ def test_extract_file_stamps_real_heading_and_page() -> None:
                 ],
             }
             return types.SimpleNamespace(
-                text=json.dumps(payload), tokens_in=1, tokens_out=1, finish_reason="stop"
+                text=json.dumps(payload),
+                tokens_in=1,
+                tokens_out=1,
+                finish_reason="stop",
             )
 
     config = types.SimpleNamespace(
@@ -139,3 +155,47 @@ def test_extract_file_stamps_real_heading_and_page() -> None:
     assert finding.quote in _SOURCE  # snapped to source
     assert finding.heading_path == ["Chapter 3"]  # derived, not "MODEL JUNK"
     assert finding.page_no == 7  # from page map, not the model's 99
+
+
+def test_unverified_quote_carries_no_model_heading() -> None:
+    from tests.unit.fakes import FakeClient
+
+    payload = {
+        "file_hash": "h",
+        "relevant": True,
+        "confidence": 0.7,
+        "reasoning": "r",
+        "findings": [
+            {
+                "claim": "paraphrased",
+                "quote": "words that appear nowhere in the source document",
+                "heading_path": ["Invented Heading"],
+                "page_no": 12,
+            }
+        ],
+    }
+    fake = FakeClient({TaskName.EXTRACT: [json.dumps(payload)]})
+    config = types.SimpleNamespace(
+        tasks={
+            TaskName.EXTRACT: types.SimpleNamespace(
+                context_window=8000, max_tokens=512, model="m"
+            )
+        }
+    )
+    result = asyncio.run(
+        extract_file(
+            "q",
+            None,
+            "f.pdf",
+            "h",
+            _SOURCE,
+            fake,  # type: ignore[arg-type]
+            config,  # type: ignore[arg-type]
+            sections=[_SOURCE],
+            page_map=[(0, 7)],
+        )
+    )
+    finding = result.findings[0]
+    assert not finding.quote_verified
+    assert finding.heading_path == []  # never the model's "Invented Heading"
+    assert finding.page_no is None

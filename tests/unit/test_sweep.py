@@ -72,6 +72,7 @@ def test_sweep_skips_routing_and_caches(corpus: Path) -> None:
             client=fake,
             synthesize_answer=True,
             on_progress=lambda d, t: progress.append((d, t)),
+            confirm=lambda _e: True,
         )
     )
     assert report.mode == "sweep"
@@ -83,7 +84,11 @@ def test_sweep_skips_routing_and_caches(corpus: Path) -> None:
 
     # second identical run: everything from cache, zero extract calls
     fake2 = FakeClient({TaskName.SYNTHESIZE: ["Still both [1] [2]."]})
-    report2 = asyncio.run(qp.run_query(corpus, "q", config, mode="sweep", client=fake2))
+    report2 = asyncio.run(
+        qp.run_query(
+            corpus, "q", config, mode="sweep", client=fake2, confirm=lambda _e: True
+        )
+    )
     assert report2.cached_evaluations == 2
     assert TaskName.EXTRACT not in fake2.calls
 
@@ -102,6 +107,7 @@ def test_sweep_skips_routing_and_caches(corpus: Path) -> None:
             mode="sweep",
             relevance="strict",
             client=fake3,
+            confirm=lambda _e: True,
         )
     )
     assert report3.cached_evaluations == 0
@@ -121,7 +127,9 @@ def test_auto_mode_sweeps_small_corpus(corpus: Path) -> None:
         }
     )
     report = asyncio.run(
-        qp.run_query(corpus, "q2", config, client=fake)  # mode defaults auto
+        qp.run_query(
+            corpus, "q2", config, client=fake, confirm=lambda _e: True
+        )  # mode defaults auto
     )
     assert report.mode == "sweep"  # 2 files <= threshold 150
 
@@ -145,7 +153,9 @@ def test_auto_mode_sweeps_small_corpus(corpus: Path) -> None:
             TaskName.SYNTHESIZE: [],
         }
     )
-    report2 = asyncio.run(qp.run_query(corpus, "q3", config, client=fake2))
+    report2 = asyncio.run(
+        qp.run_query(corpus, "q3", config, client=fake2, confirm=lambda _e: True)
+    )
     assert report2.mode == "route"
 
 
@@ -200,7 +210,6 @@ def test_converter_check_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(builtins, "__import__", broken)
     with pytest.raises(IngestError, match="tokenizers"):
         check_converter_available()
-
 
 
 def test_explain_lists_persisted_verdicts(

@@ -96,18 +96,23 @@ def _salvage_truncated(raw: str) -> str | None:
     return raw[: open_bracket + 1] + ",".join(objects) + "]}"
 
 
-def _try_validate(raw: str, output_model: type[T]) -> T | None:
-    """Validates ``raw``; on failure tries a truncation salvage, else None."""
+def _try_validate(raw: str, output_model: type[T]) -> T | ValidationError:
+    """Validates ``raw``; on failure tries a truncation salvage.
+
+    Returns:
+        The validated model, or the validation error of ``raw`` itself when
+        neither it nor its salvage validates.
+    """
     try:
         return output_model.model_validate_json(raw)
-    except ValidationError:
+    except ValidationError as error:
         salvaged = _salvage_truncated(raw)
         if salvaged is None:
-            return None
+            return error
         try:
             return output_model.model_validate_json(salvaged)
         except ValidationError:
-            return None
+            return error
 
 
 async def complete_structured(
@@ -165,62 +170,56 @@ async def complete_structured(
             raw_output=completion.text,
         )
     validated = _try_validate(raw, output_model)
-    if validated is not None:
+    if not isinstance(validated, ValidationError):
         return validated
+    first_error = validated
 
-    # Re-derive the validation error for the repair message (salvage failed).
-    try:
-        output_model.model_validate_json(raw)
-    except ValidationError as first_error:
-        _log.info(
-            "task=%s structured output failed validation; one repair attempt",
-            task.value,
+    _log.info(
+        "task=%s structured output failed validation; one repair attempt",
+        task.value,
+    )
+    truncated = completion.finish_reason == "length"
+    guidance = (
+        "Your previous output was cut off before the JSON finished "
+        "(it exceeded the length limit). Return STRICTLY VALID, COMPLETE "
+        "JSON: include only the most important findings (at most 8), keep "
+        "each quote under 25 words, and make sure every brace and bracket "
+        "is closed."
+        if truncated
+        else (
+            "Your JSON failed validation with these errors:\n"
+            f"{first_error}\n"
+            "Return only the corrected JSON object."
         )
-        truncated = completion.finish_reason == "length"
-        guidance = (
-            "Your previous output was cut off before the JSON finished "
-            "(it exceeded the length limit). Return STRICTLY VALID, COMPLETE "
-            "JSON: include only the most important findings (at most 8), keep "
-            "each quote under 25 words, and make sure every brace and bracket "
-            "is closed."
-            if truncated
-            else (
-                "Your JSON failed validation with these errors:\n"
-                f"{first_error}\n"
-                "Return only the corrected JSON object."
-            )
+    )
+    repair_messages = messages + [
+        {"role": "assistant", "content": completion.text},
+        {"role": "user", "content": guidance},
+    ]
+    repaired = await client.complete(
+        task, repair_messages, response_format={"type": "json_object"}
+    )
+    raw2 = _strip_fences(repaired.text)
+    if not raw2:
+        raise StructuredOutputError(
+            f"task '{task.value}' returned an empty completion on the "
+            f"repair attempt (prompt_tokens={repaired.tokens_in}, "
+            f"completion_tokens={repaired.tokens_out}); likely the prompt "
+            "is too large for the model's context window.",
+            raw_output=repaired.text,
         )
-        repair_messages = messages + [
-            {"role": "assistant", "content": completion.text},
-            {"role": "user", "content": guidance},
-        ]
-        repaired = await client.complete(
-            task, repair_messages, response_format={"type": "json_object"}
-        )
-        raw2 = _strip_fences(repaired.text)
-        if not raw2:
-            raise StructuredOutputError(
-                f"task '{task.value}' returned an empty completion on the "
-                f"repair attempt (prompt_tokens={repaired.tokens_in}, "
-                f"completion_tokens={repaired.tokens_out}); likely the prompt "
-                "is too large for the model's context window.",
-                raw_output=repaired.text,
-            )
-        validated2 = _try_validate(raw2, output_model)
-        if validated2 is not None:
-            return validated2
-        try:
-            output_model.model_validate_json(raw2)
-        except ValidationError as second_error:
-            hint = (
-                " The output was truncated at the length limit; raise this "
-                "task's max_tokens or reduce findings per call."
-                if repaired.finish_reason == "length"
-                or completion.finish_reason == "length"
-                else ""
-            )
-            raise StructuredOutputError(
-                f"task '{task.value}' output failed validation after repair: "
-                f"{second_error}.{hint}",
-                raw_output=raw2,
-            ) from second_error
+    validated2 = _try_validate(raw2, output_model)
+    if not isinstance(validated2, ValidationError):
+        return validated2
+    second_error = validated2
+    hint = (
+        " The output was truncated at the length limit; raise this "
+        "task's max_tokens or reduce findings per call."
+        if repaired.finish_reason == "length" or completion.finish_reason == "length"
+        else ""
+    )
+    raise StructuredOutputError(
+        f"task '{task.value}' output failed validation after repair: "
+        f"{second_error}.{hint}",
+        raw_output=raw2,
+    ) from second_error

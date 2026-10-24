@@ -11,8 +11,13 @@ from corpusqa.llm.tasks import Completion
 class FakeClient:
     """Returns scripted replies per task, FIFO; counts tokens by ~4 chars."""
 
-    def __init__(self, scripts: dict[TaskName, list[str]]) -> None:
+    def __init__(
+        self,
+        scripts: dict[TaskName, list[str]],
+        unpriced: set[TaskName] | None = None,
+    ) -> None:
         self._scripts = {k: list(v) for k, v in scripts.items()}
+        self._unpriced = unpriced or set()
         self.calls: dict[TaskName, list[list[dict[str, str]]]] = {}
         self._ledger: dict[TaskName, list[Completion]] = {}
 
@@ -29,7 +34,8 @@ class FakeClient:
             model=f"fake-{task.value}",
             tokens_in=sum(len(m["content"]) // 4 for m in messages),
             tokens_out=len(text) // 4,
-            cost_usd=0.001,
+            cost_usd=0.0 if task in self._unpriced else 0.001,
+            priced=task not in self._unpriced,
         )
         self._ledger.setdefault(task, []).append(completion)
         return completion
@@ -49,3 +55,7 @@ class FakeClient:
             )
             for t, cs in self._ledger.items()
         }
+
+    def unpriced_by_task(self) -> dict[TaskName, int]:
+        out = {t: sum(1 for c in cs if not c.priced) for t, cs in self._ledger.items()}
+        return {t: n for t, n in out.items() if n}

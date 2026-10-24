@@ -202,9 +202,7 @@ def _doc_via_soffice(source: Path, scratch: Path) -> Path:
     return produced
 
 
-def _build_page_map(
-    document: "DoclingDocument", markdown: str
-) -> list[tuple[int, int]]:
+def _build_page_map(document: DoclingDocument, markdown: str) -> list[tuple[int, int]]:
     """Builds sorted ``(markdown_offset, page_no)`` marks from docling provenance.
 
     ``export_to_markdown`` discards the per-item page numbers docling records,

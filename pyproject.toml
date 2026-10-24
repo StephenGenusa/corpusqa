@@ -14,10 +14,11 @@ dependencies = [
     "PyYAML>=6.0",
     "litellm>=1.40",
     "docling>=2.0",
+    "tqdm>=4.66",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.10", "types-PyYAML"]
+dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.10", "types-PyYAML", "types-tqdm"]
 
 [project.scripts]
 corpusqa = "corpusqa.cli.main:main"

@@ -119,7 +119,7 @@ def _dedup(items: list[str]) -> list[str]:
     return out
 
 
-def _merge_cards(cards: list["CatalogCard"]) -> "CatalogCard":
+def _merge_cards(cards: list[CatalogCard]) -> CatalogCard:
     """Deterministically unions partial cards into one (no LLM call).
 
     Each list field is concatenated then deduplicated (case-insensitive,
@@ -150,7 +150,7 @@ def _merge_cards(cards: list["CatalogCard"]) -> "CatalogCard":
 
 async def _card_for_text(
     client: LLMTaskClient, rel_path: str, text: str
-) -> "CatalogCard":
+) -> CatalogCard:
     """One catalog-card LLM call over a chunk (or whole file)."""
     from corpusqa.prompts import catalog_card as card_prompt
 

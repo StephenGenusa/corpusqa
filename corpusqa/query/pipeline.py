@@ -8,6 +8,7 @@ interactive confirmation. Costs are aggregated per task and recorded to
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import logging
@@ -23,7 +24,12 @@ from corpusqa.errors import BudgetExceededError, CorpusQAError
 from corpusqa.ingest.pipeline import index_paths
 from corpusqa.llm.tasks import LLMTaskClient
 from corpusqa.query.budget import CostEstimate, estimate_pass1, estimate_query
-from corpusqa.query.extractor import ExtractionResult, extract_file, plan_sections
+from corpusqa.query.extractor import (
+    ExtractionResult,
+    PartialExtractionError,
+    extract_file,
+    plan_sections,
+)
 from corpusqa.query.router import Candidate, route
 from corpusqa.query.synthesizer import CitedAnswer, synthesize
 
@@ -57,14 +63,25 @@ def _check_budget_gate(
     just under the threshold could together spend ~2x it without ever
     prompting.
 
+    A stage with an unpriced task always asks: its true cost is unknown, so
+    a $0 projection proves nothing.
+
     Raises:
-        BudgetExceededError: Cumulative estimate over threshold, not confirmed.
+        BudgetExceededError: Cumulative estimate over threshold (or a task
+            unpriced), not confirmed.
     """
     cumulative = prior_usd + estimate.total_usd
-    if cumulative <= config.budget.confirm_above_usd:
+    if cumulative <= config.budget.confirm_above_usd and not estimate.unpriced_tasks:
         return
     if confirm is not None and confirm(estimate):
         return
+    if estimate.unpriced_tasks:
+        raise BudgetExceededError(
+            f"{stage}: no price is known for task(s) "
+            f"{', '.join(estimate.unpriced_tasks)}, so the cost of this run "
+            "cannot be projected and it was not confirmed (set "
+            "cost_per_mtok_in/cost_per_mtok_out for the task, or use --yes)"
+        )
     raise BudgetExceededError(
         f"estimated cumulative cost ${cumulative:.2f} (this stage: {stage} "
         f"${estimate.total_usd:.2f}) exceeds the "
@@ -88,9 +105,7 @@ def _pass1_estimate(
     pending_tokens: list[int] = []
     for row in store.files_needing_cards():
         markdown = (cache_dir / f"{row.file_hash}.md").read_text(encoding="utf-8")
-        pending_tokens.append(
-            client.count_tokens(TaskName.CATALOG_SUMMARIZE, markdown)
-        )
+        pending_tokens.append(client.count_tokens(TaskName.CATALOG_SUMMARIZE, markdown))
     return estimate_pass1(pending_tokens, len(store.all_parseable_files()), config)
 
 
@@ -111,6 +126,8 @@ class QueryReport:
         cached_evaluations: Files answered from the evaluation cache.
         extraction_failures: ``(rel_path, error)`` pairs; partial results
             are still rendered (exit code 2 at the CLI).
+        unpriced_calls: Calls per task whose serving model has no known
+            price; ``actual_usage`` understates cost when non-empty.
     """
 
     answer: CitedAnswer | None
@@ -123,6 +140,7 @@ class QueryReport:
     actual_usage: dict[TaskName, tuple[int, int, float]] = field(default_factory=dict)
     mode: str = "route"
     cached_evaluations: int = 0
+    unpriced_calls: dict[TaskName, int] = field(default_factory=dict)
 
 
 async def run_query(
@@ -225,8 +243,9 @@ async def run_query(
             for f in parseable:
                 if f.file_hash not in routed and f.rel_path in failed_paths:
                     candidates.append(
-                        Candidate(file=f, reason="card generation failed; "
-                                  "included for recall")
+                        Candidate(
+                            file=f, reason="card generation failed; included for recall"
+                        )
                     )
 
         extract_model = config.tasks[TaskName.EXTRACT].model
@@ -291,7 +310,7 @@ async def run_query(
                         config,
                         relevance=relevance,
                         sections=planned_sections[h],
-                        on_section=lambda fh=h: _tick(fh),
+                        on_section=functools.partial(_tick, h),
                         page_map=page_maps.get(h),
                     )
                     store.put_evaluation(
@@ -302,6 +321,10 @@ async def run_query(
                         result.model_dump_json(),
                         question=question,
                     )
+            except PartialExtractionError as exc:
+                # Show what survived, but report the file and never cache it.
+                failures.append((cand.file.rel_path, str(exc)))
+                result = exc.result
             except CorpusQAError as exc:
                 failures.append((cand.file.rel_path, str(exc)))
                 return None
@@ -357,6 +380,7 @@ async def run_query(
             card_report=card_report,
             extraction_failures=failures,
             actual_usage=client.usage_by_task(),
+            unpriced_calls=client.unpriced_by_task(),
             mode=mode,
             cached_evaluations=cached,
         )

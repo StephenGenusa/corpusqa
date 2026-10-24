@@ -20,6 +20,7 @@ import litellm
 
 from corpusqa.config.schema import AppConfig, TaskConfig, TaskName
 from corpusqa.errors import LLMError
+from corpusqa.llm.pricing import cost_map_rate, task_rate
 
 _NUM_RETRIES = 3
 _log = logging.getLogger("corpusqa.llm")
@@ -35,9 +36,11 @@ class Completion:
         tokens_in: Prompt tokens consumed.
         tokens_out: Completion tokens produced.
         cost_usd: Cost in USD, using the per-task override when configured,
-            otherwise LiteLLM's cost map (0.0 when neither knows the model).
+            otherwise LiteLLM's cost map; 0.0 when ``priced`` is False.
         finish_reason: Why generation stopped ('stop', 'length', ...);
             'length' means the output hit max_tokens and may be truncated.
+        priced: False when no price is known for the serving model, so
+            ``cost_usd`` understates the real cost.
     """
 
     text: str
@@ -46,6 +49,7 @@ class Completion:
     tokens_out: int
     cost_usd: float
     finish_reason: str | None = None
+    priced: bool = True
 
 
 class LLMTaskClient:
@@ -83,24 +87,6 @@ class LLMTaskClient:
         }
         self._ledger: dict[TaskName, list[Completion]] = {}
 
-    def price_per_mtok(self, task: TaskName) -> tuple[float, float]:
-        """Returns (input, output) USD per million tokens for a task's model.
-
-        Per-task config overrides are authoritative; otherwise LiteLLM's
-        cost map is consulted; unknown models price at 0.0 (and should be
-        given explicit overrides in config for meaningful estimates).
-        """
-        cfg = self._task(task)
-        if cfg.cost_per_mtok_in is not None or cfg.cost_per_mtok_out is not None:
-            return (cfg.cost_per_mtok_in or 0.0, cfg.cost_per_mtok_out or 0.0)
-        info = litellm.model_cost.get(cfg.model) or litellm.model_cost.get(
-            cfg.model.split("/", 1)[-1], {}
-        )
-        return (
-            float(info.get("input_cost_per_token", 0.0)) * 1_000_000,
-            float(info.get("output_cost_per_token", 0.0)) * 1_000_000,
-        )
-
     def _task(self, task: TaskName) -> TaskConfig:
         return self._config.tasks[task]
 
@@ -131,30 +117,28 @@ class LLMTaskClient:
         response: Any,  # noqa: ANN401 -- LiteLLM response object
         t_in: int,
         t_out: int,
-    ) -> float:
-        """Computes call cost.
+    ) -> float | None:
+        """Computes call cost, or None when the serving model is unpriced.
 
-        A per-task override only describes the task's PRIMARY model. When a
-        fallback served the call, the served model differs and the override
-        no longer applies (a local-priced-0 task that fell back to a paid
-        provider must not be booked at $0); price the actual model via
-        LiteLLM instead. ``response.model`` is the post-fallback model.
+        A per-task override, and the loopback-is-free rule, describe only the
+        task's PRIMARY model. When a fallback served the call, the served
+        model differs (a local-priced-0 task that fell back to a paid provider
+        must not be booked at $0); price the actual model via LiteLLM instead.
+        ``response.model`` is the post-fallback model.
         """
         served = str(getattr(response, "model", "") or "")
         primary = task_cfg.model
         is_primary = served == primary or served == primary.split("/", 1)[-1]
-        has_override = (
-            task_cfg.cost_per_mtok_in is not None
-            or task_cfg.cost_per_mtok_out is not None
-        )
-        if has_override and is_primary:
-            cin = (task_cfg.cost_per_mtok_in or 0.0) * t_in / 1_000_000
-            cout = (task_cfg.cost_per_mtok_out or 0.0) * t_out / 1_000_000
-            return cin + cout
-        try:
-            return float(litellm.completion_cost(completion_response=response))
-        except Exception:  # noqa: BLE001 -- unknown model in cost map is benign
-            return 0.0
+        if is_primary:
+            rate = task_rate(task_cfg, self._config.providers[task_cfg.provider])
+        else:
+            try:
+                return float(litellm.completion_cost(completion_response=response))
+            except Exception:  # noqa: BLE001 -- unknown model: try the cost map
+                rate = cost_map_rate(served)
+        if rate is None:
+            return None
+        return (rate[0] * t_in + rate[1] * t_out) / 1_000_000
 
     async def complete(
         self,
@@ -200,15 +184,23 @@ class LLMTaskClient:
         t_out = int(getattr(usage, "completion_tokens", 0) or 0)
         text = response.choices[0].message.content or ""
         finish_reason = getattr(response.choices[0], "finish_reason", None)
+        cost = self._cost(task_cfg, response, t_in, t_out)
         completion = Completion(
             text=text,
             model=str(getattr(response, "model", task_cfg.model)),
             tokens_in=t_in,
             tokens_out=t_out,
-            cost_usd=self._cost(task_cfg, response, t_in, t_out),
+            cost_usd=cost or 0.0,
             finish_reason=str(finish_reason) if finish_reason else None,
+            priced=cost is not None,
         )
         self._ledger.setdefault(task, []).append(completion)
+        if cost is None:
+            _log.warning(
+                "task=%s model=%s has no known price; its cost is not counted",
+                task.value,
+                completion.model,
+            )
         _log.info(
             "call task=%s model=%s tokens_in=%d tokens_out=%d cost_usd=%.6f",
             task.value,
@@ -272,4 +264,17 @@ class LLMTaskClient:
                 sum(c.tokens_out for c in completions),
                 round(sum(c.cost_usd for c in completions), 6),
             )
+        return out
+
+    def unpriced_by_task(self) -> dict[TaskName, int]:
+        """Returns the number of calls per task whose cost is unknown.
+
+        Those calls are in ``usage_by_task`` at $0, so its totals are a lower
+        bound whenever this is non-empty.
+        """
+        out: dict[TaskName, int] = {}
+        for task, completions in self._ledger.items():
+            unpriced = sum(1 for c in completions if not c.priced)
+            if unpriced:
+                out[task] = unpriced
         return out

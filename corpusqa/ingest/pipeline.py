@@ -117,7 +117,12 @@ def run_index(
                 if item.drift is DriftKind.MODIFIED:
                     _delete(store, cache_dir, known[item.rel_path])
                 _convert_one(
-                    store, cache_dir, corpus_root, item, config, report,
+                    store,
+                    cache_dir,
+                    corpus_root,
+                    item,
+                    config,
+                    report,
                     get_converter(),
                 )
 

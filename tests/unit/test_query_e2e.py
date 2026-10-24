@@ -118,6 +118,7 @@ def test_query_end_to_end_with_citations(
             load_config(EXAMPLE),
             mode="route",
             synthesize_answer=True,
+            confirm=lambda _e: True,
         )
     )
     assert report.card_report.generated == 2
@@ -150,7 +151,14 @@ def test_query_end_to_end_with_citations(
     )
     monkeypatch.setattr(qp, "LLMTaskClient", lambda _config: fake2)
     report2 = asyncio.run(
-        qp.run_query(corpus, "anything?", load_config(EXAMPLE), mode="route", synthesize_answer=True)
+        qp.run_query(
+            corpus,
+            "anything?",
+            load_config(EXAMPLE),
+            mode="route",
+            synthesize_answer=True,
+            confirm=lambda _e: True,
+        )
     )
     assert report2.card_report.generated == 0
     assert "No relevant content" in report2.answer.text
@@ -209,7 +217,16 @@ def test_citation_repair_then_uncited_marker(
         }
     )
     monkeypatch.setattr(qp, "LLMTaskClient", lambda _config: fake)
-    report = asyncio.run(qp.run_query(corpus, "q", load_config(EXAMPLE), mode="route", synthesize_answer=True))
+    report = asyncio.run(
+        qp.run_query(
+            corpus,
+            "q",
+            load_config(EXAMPLE),
+            mode="route",
+            synthesize_answer=True,
+            confirm=lambda _e: True,
+        )
+    )
     assert "[uncited]" in report.answer.text
     assert report.answer.uncited_claims  # surfaced, not dropped
     assert len(fake.calls[TaskName.SYNTHESIZE]) == 2  # exactly one repair

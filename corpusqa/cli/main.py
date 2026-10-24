@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, NoReturn
 
 from corpusqa.config import load_config
 from corpusqa.config.schema import AppConfig
@@ -19,6 +20,9 @@ from corpusqa.logging_setup import configure as configure_logging
 from corpusqa.query.budget import CostEstimate
 from corpusqa.query.hits import render_hits
 from corpusqa.query.pipeline import run_estimate, run_query
+
+if TYPE_CHECKING:
+    from tqdm import tqdm
 
 EXIT_OK = 0
 EXIT_USER_ERROR = 1
@@ -143,6 +147,11 @@ def _confirm(estimate: CostEstimate) -> bool:
         f"{estimate.candidate_files} file(s) "
         f"({estimate.total_input_tokens} input tokens)."
     )
+    if estimate.unpriced_tasks:
+        print(
+            f"unpriced: {', '.join(estimate.unpriced_tasks)} -- no price is "
+            "known for these models, so their cost is NOT in that estimate."
+        )
     return input("proceed? [y/N] ").strip().lower() in ("y", "yes")
 
 
@@ -157,7 +166,7 @@ class _Progress:
     """
 
     def __init__(self) -> None:
-        self._bar = None
+        self._bar: tqdm[NoReturn] | None = None
 
     def __call__(self, done: int, total: int) -> None:
         if self._bar is None:
@@ -235,6 +244,12 @@ def _cmd_query(args: argparse.Namespace, config: AppConfig) -> int:
         print("\nactual usage:")
         for task, (t_in, t_out, usd) in report.actual_usage.items():
             print(f"  {task.value:<20} in={t_in} out={t_out} ${usd:.4f}")
+    for task, calls in report.unpriced_calls.items():
+        print(
+            f"warning: {calls} {task.value} call(s) were served by a model with "
+            "no known price; their cost is not counted.",
+            file=sys.stderr,
+        )
     if report.extraction_failures:
         for rel_path, error in report.extraction_failures:
             print(f"extraction failed: {rel_path}: {error}", file=sys.stderr)
@@ -297,11 +312,17 @@ def _cmd_estimate(args: argparse.Namespace, config: AppConfig) -> int:
     print(f"candidates ({len(candidates)}):")
     for cand in candidates:
         print(f"  {cand.file.rel_path}  -- {cand.reason}")
+    per_task = ", ".join(f"{t}=${usd:.4f}" for t, usd in estimate.per_task_usd.items())
     print(
         f"projected: ${estimate.total_usd:.2f} "
         f"({estimate.total_input_tokens} input tokens) "
-        f"per-task: {estimate.per_task_usd}"
+        f"per-task: {per_task}"
     )
+    if estimate.unpriced_tasks:
+        print(
+            f"unpriced: {', '.join(estimate.unpriced_tasks)} -- no price is "
+            "known for these models, so their cost is NOT in that projection."
+        )
     return EXIT_OK
 
 

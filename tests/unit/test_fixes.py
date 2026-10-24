@@ -27,9 +27,7 @@ EXAMPLE = Path(__file__).resolve().parents[2] / "corpusqa.example.yaml"
 
 
 def _ev() -> list[Evidence]:
-    return [
-        Evidence(1, "a.md", Finding(claim="c", quote="q", heading_path=["H"]))
-    ]
+    return [Evidence(1, "a.md", Finding(claim="c", quote="q", heading_path=["H"]))]
 
 
 def test_uncited_claim_sentence_is_flagged() -> None:
@@ -79,10 +77,18 @@ def test_extract_file_sets_quote_verified() -> None:
                         "relevant": True,
                         "confidence": 0.9,
                         "findings": [
-                            {"claim": "real", "quote": "quick brown fox",
-                             "heading_path": ["Title"], "page_no": None},
-                            {"claim": "fake", "quote": "not in the document",
-                             "heading_path": ["Title"], "page_no": None},
+                            {
+                                "claim": "real",
+                                "quote": "quick brown fox",
+                                "heading_path": ["Title"],
+                                "page_no": None,
+                            },
+                            {
+                                "claim": "fake",
+                                "quote": "not in the document",
+                                "heading_path": ["Title"],
+                                "page_no": None,
+                            },
                         ],
                     }
                 )
