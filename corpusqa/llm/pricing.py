@@ -56,17 +56,22 @@ def is_loopback(api_base: str | None) -> bool:
 def task_rate(task_cfg: TaskConfig, provider: ProviderConfig) -> Rate | None:
     """Resolves the rate for a task's primary model.
 
-    Order: per-task config override, LiteLLM's cost map, then free when the
-    provider is on loopback.
+    Each side (input, output) resolves on its own, in order: the per-task
+    config override, LiteLLM's cost map, then free when the provider is on
+    loopback. Setting only one override never prices the other side at $0.
 
     Returns:
-        The rate, or None when the model is unpriced.
+        The rate, or None when either side is unpriced.
     """
-    if task_cfg.cost_per_mtok_in is not None or task_cfg.cost_per_mtok_out is not None:
-        return (task_cfg.cost_per_mtok_in or 0.0, task_cfg.cost_per_mtok_out or 0.0)
-    rate = cost_map_rate(task_cfg.model)
-    if rate is not None:
-        return rate
-    if is_loopback(provider.api_base):
-        return (0.0, 0.0)
-    return None
+    known = cost_map_rate(task_cfg.model)
+    if known is None and is_loopback(provider.api_base):
+        known = (0.0, 0.0)
+    rate_in = task_cfg.cost_per_mtok_in
+    rate_out = task_cfg.cost_per_mtok_out
+    if rate_in is None:
+        rate_in = known[0] if known is not None else None
+    if rate_out is None:
+        rate_out = known[1] if known is not None else None
+    if rate_in is None or rate_out is None:
+        return None
+    return (rate_in, rate_out)

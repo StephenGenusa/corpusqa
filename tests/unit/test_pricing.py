@@ -233,3 +233,37 @@ def test_estimate_command_names_unpriced_tasks(
     cli.main(["estimate", "q", ".", "--config", str(EXAMPLE), "--yes"])
     out = capsys.readouterr().out
     assert "unpriced" in out and "catalog_summarize" in out
+
+
+# --- half-set overrides -------------------------------------------------
+
+
+def test_half_override_takes_other_side_from_cost_map() -> None:
+    from corpusqa.llm.pricing import task_rate
+
+    config = _config()
+    cfg = config.tasks[TaskName.QUERY_ROUTE]  # openrouter/google/gemini-2.5-flash
+    cfg.cost_per_mtok_in = 3.0
+    cfg.cost_per_mtok_out = None
+    rate = task_rate(cfg, config.providers[cfg.provider])
+    assert rate is not None
+    assert rate[0] == 3.0
+    assert rate[1] == pytest.approx(2.5)  # from LiteLLM, not $0
+
+
+def test_half_override_on_unknown_model_is_unpriced() -> None:
+    config = _config()
+    _unknown_remote(config, TaskName.SYNTHESIZE)
+    config.tasks[TaskName.SYNTHESIZE].cost_per_mtok_in = 3.0
+    assert estimate_query([1_000], config).unpriced_tasks == ("synthesize",)
+
+
+def test_half_override_on_loopback_model_is_free_on_other_side() -> None:
+    from corpusqa.llm.pricing import task_rate
+
+    config = _config()
+    cfg = config.tasks[TaskName.EXTRACT]  # ollama on localhost
+    cfg.model = UNKNOWN_LOCAL
+    cfg.cost_per_mtok_in = 0.5
+    cfg.cost_per_mtok_out = None
+    assert task_rate(cfg, config.providers[cfg.provider]) == (0.5, 0.0)
