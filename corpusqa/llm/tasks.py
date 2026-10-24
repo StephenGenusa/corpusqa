@@ -23,6 +23,7 @@ from corpusqa.errors import LLMError
 from corpusqa.llm.pricing import cost_map_rate, task_rate
 
 _NUM_RETRIES = 3
+_OLLAMA_PREFIXES = ("ollama/", "ollama_chat/")
 _log = logging.getLogger("corpusqa.llm")
 
 
@@ -109,6 +110,10 @@ class LLMTaskClient:
             "model": task_cfg.model,
             "num_retries": _NUM_RETRIES,
         }
+        if task_cfg.model.startswith(_OLLAMA_PREFIXES):
+            # Ollama otherwise runs at its server default window and silently
+            # truncates longer prompts; make it allocate what we budget for.
+            kwargs["num_ctx"] = task_cfg.context_window
         if task_cfg.fallbacks:
             kwargs["fallbacks"] = task_cfg.fallbacks
         if provider.api_base is not None:
