@@ -18,6 +18,7 @@ from corpusqa.catalog.summarizer import CatalogCard
 from corpusqa.config.schema import AppConfig, TaskName
 from corpusqa.llm.structured import complete_structured
 from corpusqa.llm.tasks import LLMTaskClient
+from corpusqa.prompts import common as common_prompt
 from corpusqa.prompts import route as route_prompt
 from corpusqa.query.budget import route_shard_limits
 
@@ -129,12 +130,7 @@ async def route(
 
     included: dict[str, str] = {}
     decided: set[str] = set()
-    definition_block = (
-        f"The user defines the topic as follows; judge relevance against "
-        f"THIS definition, not the common meaning:\n{definition}\n\n"
-        if definition
-        else ""
-    )
+    definition_block = common_prompt.definition_block(definition)
     for shard in _shard_cards(rendered, client, config):
         cards_block = "\n".join(rendered[i] for i in shard)
         messages = [

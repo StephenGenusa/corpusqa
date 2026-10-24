@@ -2,21 +2,6 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
-
-
-class CatalogCardInput(BaseModel):
-    """Inputs to card generation.
-
-    Attributes:
-        rel_path: File path for context.
-        doc_markdown: Head of the file's markdown within budget.
-    """
-
-    rel_path: str
-    doc_markdown: str
-
-
 SYSTEM = (
     "You build an extraction INVENTORY used to route arbitrary future "
     "questions to files. Do not summarize -- summaries collapse the "

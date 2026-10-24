@@ -2,27 +2,6 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
-
-
-class ExtractInput(BaseModel):
-    """Inputs to one per-file extraction call.
-
-    Attributes:
-        question: The user question, verbatim.
-        definition: Optional user topic definition, verbatim.
-        rel_path: File path for context.
-        file_hash: Identity echoed into the output.
-        doc_markdown: Whole-file (or section) markdown with heading anchors.
-    """
-
-    question: str
-    definition: str | None
-    rel_path: str
-    file_hash: str
-    doc_markdown: str
-
-
 SYSTEM = (
     "You extract findings relevant to a question from one document. Judge "
     "relevance against the user's own definition when one is given. Always "

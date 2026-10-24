@@ -205,7 +205,7 @@ corpusqa/
 ├── catalog/        # SQLite store (sole SQL chokepoint), inventory-card generation
 ├── query/          # router, whole-file extractor, citation assembler, budget, pipeline
 ├── llm/            # LiteLLM chokepoint (tasks, structured output w/ repair retry)
-├── prompts/        # every prompt as (InputModel, SYSTEM, TEMPLATE) — no inline strings
+├── prompts/        # all prompt text (SYSTEM, TEMPLATE, repairs) — no inline strings
 └── evalkit.py      # corpusqa-eval
 tests/unit/         # tests; LLM layer mocked at the single seam
 tests/eval/         # fixture corpus + qa_pairs.yaml

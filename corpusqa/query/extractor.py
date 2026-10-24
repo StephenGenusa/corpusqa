@@ -19,8 +19,9 @@ from pydantic import BaseModel, Field
 
 from corpusqa.config.schema import AppConfig, TaskName
 from corpusqa.errors import CorpusQAError
-from corpusqa.llm.structured import _schema_instruction, complete_structured
+from corpusqa.llm.structured import complete_structured, schema_instruction
 from corpusqa.llm.tasks import Completion, LLMTaskClient
+from corpusqa.prompts import common as common_prompt
 
 _log = logging.getLogger("corpusqa.query")
 
@@ -129,16 +130,12 @@ def extraction_fingerprint() -> str:
         extract_prompt.SYSTEM,
         extract_prompt.TEMPLATE,
         json.dumps(extract_prompt.RELEVANCE_INSTRUCTIONS, sort_keys=True),
-        _DEFINITION_BLOCK,
-        _schema_instruction(ExtractionResult),
+        common_prompt.DEFINITION_BLOCK,
+        schema_instruction(ExtractionResult),
     ]
     return hashlib.sha256("\x00".join(parts).encode()).hexdigest()[:16]
 
 
-_DEFINITION_BLOCK = (
-    "The user defines the topic as follows; judge relevance against "
-    "THIS definition, not the common meaning:\n{definition}\n\n"
-)
 _PROMPT_OVERHEAD_TOKENS = 2_000
 # Conservative chars-per-token for sizing the document portion of a section.
 # The previous value was an implicit 4 (English prose average); dense or
@@ -557,9 +554,7 @@ async def extract_file(
 
     if sections is None:
         sections = plan_sections(markdown, client, config)
-    definition_block = (
-        _DEFINITION_BLOCK.format(definition=definition) if definition else ""
-    )
+    definition_block = common_prompt.definition_block(definition)
 
     # Normalize the whole-file markdown once; every finding's quote is located
     # against it to (a) verify and (b) recover real provenance.

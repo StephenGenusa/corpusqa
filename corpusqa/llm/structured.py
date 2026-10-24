@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from corpusqa.config.schema import TaskName
 from corpusqa.errors import StructuredOutputError
 from corpusqa.llm.tasks import Completion, LLMTaskClient
+from corpusqa.prompts import structured as structured_prompt
 
 _log = logging.getLogger("corpusqa.llm")
 
@@ -32,13 +33,10 @@ def _strip_fences(text: str) -> str:
     return _FENCE_RE.sub("", text).strip()
 
 
-def _schema_instruction(output_model: type[BaseModel]) -> str:
+def schema_instruction(output_model: type[BaseModel]) -> str:
     """Builds the schema-in-prompt instruction appended to the system turn."""
     schema = json.dumps(output_model.model_json_schema(), indent=2)
-    return (
-        "\n\nRespond with a single JSON object conforming to this JSON "
-        f"schema. No prose, no Markdown fences.\n{schema}"
-    )
+    return structured_prompt.SCHEMA_INSTRUCTION.format(schema=schema)
 
 
 def _complete_array_objects(body: str) -> list[str]:
@@ -158,7 +156,7 @@ async def complete_structured(
         LLMError: If the underlying calls fail.
     """
     messages = [dict(m) for m in messages]
-    instruction = _schema_instruction(output_model)
+    instruction = schema_instruction(output_model)
     if messages and messages[0].get("role") == "system":
         messages[0]["content"] += instruction
     else:
@@ -206,17 +204,9 @@ async def complete_structured(
     )
     truncated = completion.finish_reason == "length"
     guidance = (
-        "Your previous output was cut off before the JSON finished "
-        "(it exceeded the length limit). Return STRICTLY VALID, COMPLETE "
-        "JSON: include only the most important findings (at most 8), keep "
-        "each quote under 25 words, and make sure every brace and bracket "
-        "is closed."
+        structured_prompt.TRUNCATED_REPAIR
         if truncated
-        else (
-            "Your JSON failed validation with these errors:\n"
-            f"{first_error}\n"
-            "Return only the corrected JSON object."
-        )
+        else structured_prompt.INVALID_REPAIR.format(errors=first_error)
     )
     repair_messages = messages + [
         {"role": "assistant", "content": completion.text},

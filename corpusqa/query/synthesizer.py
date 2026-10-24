@@ -321,13 +321,8 @@ async def synthesize(
     answer = await _synthesize_once(question, block, client)
     text, bad, used, ok_n, bad_n = resolve_citations(answer, evidence)
     if bad:  # one repair round trip, then surface what remains
-        repair = (
-            f"{synth_prompt.SYSTEM}\n\nYour previous answer had citation "
-            f"problems: every sentence that makes a claim must end with a "
-            f"valid evidence citation [n] (valid numbers are 1..{len(evidence)}), "
-            f"and you must not cite numbers outside that range. Rewrite the "
-            f"answer so every claim carries a valid citation; drop any claim "
-            f"you cannot support with the given evidence."
+        repair = synth_prompt.SYSTEM + synth_prompt.REPAIR.format(
+            max_number=len(evidence)
         )
         answer = await _synthesize_once(question, block, client, system=repair)
         text, bad, used, ok_n, bad_n = resolve_citations(answer, evidence)
@@ -361,7 +356,9 @@ async def _synthesize_once(
             {"role": "system", "content": system or synth_prompt.SYSTEM},
             {
                 "role": "user",
-                "content": (f"Question:\n{question}\n\nEvidence:\n{evidence_block}"),
+                "content": synth_prompt.TEMPLATE.format(
+                    question=question, evidence_block=evidence_block
+                ),
             },
         ],
     )
@@ -442,8 +439,8 @@ async def _condense_evidence(
                 {"role": "system", "content": synth_prompt.PARTIAL_SYSTEM},
                 {
                     "role": "user",
-                    "content": (
-                        f"Question:\n{question}\n\nEvidence:\n{_evidence_block(batch)}"
+                    "content": synth_prompt.PARTIAL_TEMPLATE.format(
+                        question=question, evidence_block=_evidence_block(batch)
                     ),
                 },
             ],
@@ -472,7 +469,9 @@ async def _condense_texts(
                 {"role": "system", "content": synth_prompt.PARTIAL_SYSTEM},
                 {
                     "role": "user",
-                    "content": (f"Question:\n{question}\n\nDigests:\n{joined}"),
+                    "content": synth_prompt.DIGESTS_TEMPLATE.format(
+                        question=question, digests=joined
+                    ),
                 },
             ],
         )
