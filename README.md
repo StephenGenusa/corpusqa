@@ -14,7 +14,7 @@ The program, in its current state works, but it still needs work. Like most thin
 
 | Clanker Warning: AI generated slop ahead                                                                                                                                                                                                         |
 |--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| ![](clankerslop.jpg)                                                                                                                                                                                                                             |
+| ![](img/clankerslop.jpg)                                                                                                                                                                                                                         |
 | I used Anthropic's appropriately named Fable 5 model to build this out in an AI assisted mode and despite multiple passes, it still has some fabled problems left to resolve. I don't think there are any 3K+ line methods but I could be wrong. |
 
 ## Why this exists
@@ -207,7 +207,6 @@ corpusqa/
 ├── llm/            # LiteLLM chokepoint (tasks, structured output w/ repair retry)
 ├── prompts/        # every prompt as (InputModel, SYSTEM, TEMPLATE) — no inline strings
 └── evalkit.py      # corpusqa-eval
-docs/               # design.md (v0.3, as built) + v0.1 + milestone briefs
 tests/unit/         # tests; LLM layer mocked at the single seam
 tests/eval/         # fixture corpus + qa_pairs.yaml
 ```

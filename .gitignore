@@ -1,1 +1,31 @@
-*
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environments and tool caches
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Editors
+.idea/
+.vscode/
+
+# Claude Code config and agents are kept local
+.claude/
+
+# corpusqa index data; rebuild with `corpusqa index <dir>`
+.corpusqa/
+
+# Personal config; start from corpusqa.example.yaml
+corpusqa.yaml
+
+# Design notes and milestone briefs are kept local
+docs/
+
+# Local-only material: private corpora, probe scripts, working notes
+local/
