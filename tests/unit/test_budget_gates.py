@@ -113,7 +113,7 @@ def test_pass1_gate_confirm_proceeds(tmp_path: Path) -> None:
             ],
         }
     )
-    candidates, _ = asyncio.run(
+    candidates, _, _ = asyncio.run(
         qp.run_estimate(corpus, "q", _gated_config(), client=fake, confirm=confirm)
     )
     assert candidates == []
@@ -132,3 +132,15 @@ def test_sweep_mode_has_no_pass1_gate(tmp_path: Path) -> None:
             qp.run_query(corpus, "q", config, mode="sweep", client=fake, confirm=None)
         )
     assert fake.calls == {}
+
+
+def test_estimate_includes_and_reports_files_whose_card_failed(tmp_path: Path) -> None:
+    corpus = _indexed_corpus(tmp_path)
+    fake = FakeClient({TaskName.CATALOG_SUMMARIZE: ["not json", "still not json"]})
+    candidates, _, card_report = asyncio.run(
+        qp.run_estimate(
+            corpus, "q", load_config(EXAMPLE), client=fake, confirm=lambda _e: True
+        )
+    )
+    assert [c.file.rel_path for c in candidates] == ["a.md"]  # forced, as in query
+    assert [p for p, _ in card_report.failed] == ["a.md"]

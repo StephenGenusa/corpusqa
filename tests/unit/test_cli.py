@@ -85,3 +85,52 @@ def test_logging_default_is_stderr_only(tmp_path: Path) -> None:
     from corpusqa.logging_setup import configure
 
     assert configure(0, None) is None
+
+
+def test_query_exits_partial_when_cards_failed(monkeypatch: object) -> None:
+    import pytest
+
+    import corpusqa.cli.main as cli
+    from corpusqa.catalog.summarizer import CardReport
+    from corpusqa.query.budget import CostEstimate
+    from corpusqa.query.pipeline import QueryReport
+
+    mp = monkeypatch
+    assert isinstance(mp, pytest.MonkeyPatch)
+
+    async def fake_run_query(*_: object, **__: object) -> QueryReport:
+        return QueryReport(
+            answer=None,
+            candidates=[],
+            relevant_files=[],
+            estimate=CostEstimate(),
+            card_report=CardReport(failed=[("a.md", "card call failed")]),
+        )
+
+    mp.setattr(cli, "run_query", fake_run_query)
+    mp.setattr(cli, "_warn_drift", lambda *_: None)
+    assert (
+        cli.main(["query", "q", ".", "--config", EXAMPLE, "--yes"]) == cli.EXIT_PARTIAL
+    )
+
+
+def test_estimate_exits_partial_when_cards_failed(monkeypatch: object) -> None:
+    import pytest
+
+    import corpusqa.cli.main as cli
+    from corpusqa.catalog.summarizer import CardReport
+    from corpusqa.query.budget import CostEstimate
+
+    mp = monkeypatch
+    assert isinstance(mp, pytest.MonkeyPatch)
+
+    async def fake_estimate(
+        *_: object, **__: object
+    ) -> tuple[list[object], CostEstimate, CardReport]:
+        return [], CostEstimate(), CardReport(failed=[("a.md", "card call failed")])
+
+    mp.setattr(cli, "run_estimate", fake_estimate)
+    assert (
+        cli.main(["estimate", "q", ".", "--config", EXAMPLE, "--yes"])
+        == cli.EXIT_PARTIAL
+    )

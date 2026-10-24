@@ -250,9 +250,9 @@ def _cmd_query(args: argparse.Namespace, config: AppConfig) -> int:
             "no known price; their cost is not counted.",
             file=sys.stderr,
         )
-    if report.extraction_failures:
-        for rel_path, error in report.extraction_failures:
-            print(f"extraction failed: {rel_path}: {error}", file=sys.stderr)
+    for rel_path, error in report.extraction_failures:
+        print(f"extraction failed: {rel_path}: {error}", file=sys.stderr)
+    if report.extraction_failures or report.card_report.failed:
         return EXIT_PARTIAL
     return EXIT_OK
 
@@ -298,7 +298,7 @@ def _cmd_estimate(args: argparse.Namespace, config: AppConfig) -> int:
     import asyncio
 
     try:
-        candidates, estimate = asyncio.run(
+        candidates, estimate, card_report = asyncio.run(
             run_estimate(
                 args.directory,
                 args.question,
@@ -323,7 +323,9 @@ def _cmd_estimate(args: argparse.Namespace, config: AppConfig) -> int:
             f"unpriced: {', '.join(estimate.unpriced_tasks)} -- no price is "
             "known for these models, so their cost is NOT in that projection."
         )
-    return EXIT_OK
+    for rel_path, error in card_report.failed:
+        print(f"card failed: {rel_path}: {error}", file=sys.stderr)
+    return EXIT_PARTIAL if card_report.failed else EXIT_OK
 
 
 def _cmd_index(args: argparse.Namespace, config: AppConfig) -> int:

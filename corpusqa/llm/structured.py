@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Callable
 from typing import TypeVar
 
 from pydantic import BaseModel, ValidationError
@@ -96,8 +97,13 @@ def _salvage_truncated(raw: str) -> str | None:
     return raw[: open_bracket + 1] + ",".join(objects) + "]}"
 
 
-def _try_validate(raw: str, output_model: type[T]) -> T | ValidationError:
+def _try_validate(
+    raw: str, output_model: type[T], on_salvaged: Callable[[], None]
+) -> T | ValidationError:
     """Validates ``raw``; on failure tries a truncation salvage.
+
+    ``on_salvaged`` is called when only the salvage validates, i.e. trailing
+    content was dropped.
 
     Returns:
         The validated model, or the validation error of ``raw`` itself when
@@ -110,9 +116,11 @@ def _try_validate(raw: str, output_model: type[T]) -> T | ValidationError:
         if salvaged is None:
             return error
         try:
-            return output_model.model_validate_json(salvaged)
+            result = output_model.model_validate_json(salvaged)
         except ValidationError:
             return error
+        on_salvaged()
+        return result
 
 
 async def complete_structured(
@@ -120,6 +128,7 @@ async def complete_structured(
     task: TaskName,
     messages: list[dict[str, str]],
     output_model: type[T],
+    on_truncated: Callable[[], None] | None = None,
 ) -> T:
     """Runs a completion and validates the output against a Pydantic model.
 
@@ -133,6 +142,9 @@ async def complete_structured(
         messages: Chat messages; the first system message (or a prepended
             one) receives the schema instruction.
         output_model: Pydantic model the output must validate against.
+        on_truncated: Called when the output was cut off and only its complete
+            leading part was kept (a warning is logged either way), so the
+            caller can treat the result as incomplete.
 
     Returns:
         The validated model instance.
@@ -169,7 +181,16 @@ async def complete_structured(
             "input.",
             raw_output=completion.text,
         )
-    validated = _try_validate(raw, output_model)
+
+    def salvaged() -> None:
+        _log.warning(
+            "task=%s output was truncated; kept only its complete findings",
+            task.value,
+        )
+        if on_truncated is not None:
+            on_truncated()
+
+    validated = _try_validate(raw, output_model, salvaged)
     if not isinstance(validated, ValidationError):
         return validated
     first_error = validated
@@ -208,7 +229,7 @@ async def complete_structured(
             "is too large for the model's context window.",
             raw_output=repaired.text,
         )
-    validated2 = _try_validate(raw2, output_model)
+    validated2 = _try_validate(raw2, output_model, salvaged)
     if not isinstance(validated2, ValidationError):
         return validated2
     second_error = validated2

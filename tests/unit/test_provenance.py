@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import types
+from pathlib import Path
+
+import pytest
 
 from corpusqa.config.schema import TaskName
 from corpusqa.ingest.converter import _build_page_map
@@ -199,3 +202,47 @@ def test_unverified_quote_carries_no_model_heading() -> None:
     assert not finding.quote_verified
     assert finding.heading_path == []  # never the model's "Invented Heading"
     assert finding.page_no is None
+
+
+def _page_item(text: str, page: int) -> tuple[types.SimpleNamespace, int]:
+    return (
+        types.SimpleNamespace(text=text, prov=[types.SimpleNamespace(page_no=page)]),
+        0,
+    )
+
+
+def test_page_map_skips_item_only_found_before_cursor() -> None:
+    # A running header ("Notes") seen again on page 3 only matches its first
+    # occurrence at offset 0; it must not stamp page 3 onto the document start.
+    md = "Notes\nAlpha paragraph on page one.\nBeta paragraph on page two.\n"
+    doc = types.SimpleNamespace(
+        iterate_items=lambda: [
+            _page_item("Alpha paragraph on page one.", 1),
+            _page_item("Beta paragraph on page two.", 2),
+            _page_item("Notes", 3),
+        ]
+    )
+    marks = _build_page_map(doc, md)  # type: ignore[arg-type]
+    assert [page for _, page in marks] == [1, 2]
+    assert marks == sorted(marks)
+
+
+def test_page_map_failure_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    def boom() -> list[object]:
+        raise RuntimeError("bad provenance")
+
+    doc = types.SimpleNamespace(iterate_items=boom)
+    with caplog.at_level("WARNING", logger="corpusqa.ingest"):
+        assert _build_page_map(doc, "text") == []  # type: ignore[arg-type]
+    assert any("page" in r.getMessage() for r in caplog.records)
+
+
+def test_corrupt_page_map_file_is_logged(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    from corpusqa.query.pipeline import _load_page_map
+
+    (tmp_path / "h.pages.json").write_text("{not json", encoding="utf-8")
+    with caplog.at_level("WARNING", logger="corpusqa.query"):
+        assert _load_page_map(tmp_path, "h") == []
+    assert any("h.pages.json" in r.getMessage() for r in caplog.records)

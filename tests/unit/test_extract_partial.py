@@ -112,3 +112,22 @@ def test_pipeline_reports_partial_file_shows_findings_and_skips_cache(
     again = run()  # not served from cache: the partial verdict was never stored
     assert again.cached_evaluations == 0
     assert [path for path, _ in again.extraction_failures] == ["a.md"]
+
+
+def test_truncated_section_output_makes_the_file_partial() -> None:
+    truncated = _reply("quick brown fox")[:-2] + ', {"claim": "d", "quo'
+    fake = FakeClient({TaskName.EXTRACT: [truncated]})
+    with pytest.raises(PartialExtractionError, match="truncated") as info:
+        asyncio.run(
+            extract_file(
+                "q",
+                None,
+                "a.md",
+                "h",
+                SECTION_1,
+                fake,  # type: ignore[arg-type]
+                load_config(EXAMPLE),
+                sections=[SECTION_1],
+            )
+        )
+    assert [f.quote for f in info.value.result.findings] == ["quick brown fox"]

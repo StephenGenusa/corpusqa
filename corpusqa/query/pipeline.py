@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from corpusqa.catalog.store import CatalogStore
+from corpusqa.catalog.store import CatalogStore, FileRow
 from corpusqa.catalog.summarizer import CardReport, generate_cards
 from corpusqa.config.schema import AppConfig, TaskName
 from corpusqa.errors import BudgetExceededError, CorpusQAError
@@ -43,8 +43,32 @@ def _load_page_map(cache_dir: Path, file_hash: str) -> list[tuple[int, int]]:
         return []
     try:
         return [(int(o), int(p)) for o, p in json.loads(path.read_text("utf-8"))]
-    except (ValueError, OSError, TypeError):
+    except (ValueError, OSError, TypeError) as exc:
+        _log.warning(
+            "page numbers unavailable: %s is unreadable (%s); re-index with "
+            "--force to rebuild it",
+            path.name,
+            exc,
+        )
         return []
+
+
+def _include_failed_cards(
+    candidates: list[Candidate], parseable: list[FileRow], card_report: CardReport
+) -> None:
+    """Adds files whose card generation failed to ``candidates`` in place.
+
+    Such a file has no card row, so the router never sees it. Excluding it
+    would be exactly the silent recall loss the design exists to prevent, so
+    it goes to pass 2, which judges raw text and corrects the verdict.
+    """
+    routed = {c.file.file_hash for c in candidates}
+    failed_paths = {p for p, _ in card_report.failed}
+    for f in parseable:
+        if f.file_hash not in routed and f.rel_path in failed_paths:
+            candidates.append(
+                Candidate(file=f, reason="card generation failed; included for recall")
+            )
 
 
 def _check_budget_gate(
@@ -234,19 +258,7 @@ async def run_query(
             pass1_usd = pass1_estimate.total_usd
             card_report = await generate_cards(store, cache_dir, client, config)
             candidates = await route(question, definition, store, client, config)
-            # A file whose card generation failed has no card row, so the
-            # router never sees it. Excluding it would be exactly the silent
-            # recall loss the design exists to prevent, so force such files
-            # into pass 2 (which judges raw text and corrects the verdict).
-            routed = {c.file.file_hash for c in candidates}
-            failed_paths = {p for p, _ in card_report.failed}
-            for f in parseable:
-                if f.file_hash not in routed and f.rel_path in failed_paths:
-                    candidates.append(
-                        Candidate(
-                            file=f, reason="card generation failed; included for recall"
-                        )
-                    )
+            _include_failed_cards(candidates, parseable, card_report)
 
         extract_model = config.tasks[TaskName.EXTRACT].model
         markdowns: dict[str, str] = {}
@@ -393,7 +405,7 @@ async def run_estimate(
     definition: str | None = None,
     client: LLMTaskClient | None = None,
     confirm: Callable[[CostEstimate], bool] | None = None,
-) -> tuple[list[Candidate], CostEstimate]:
+) -> tuple[list[Candidate], CostEstimate, CardReport]:
     """Runs pass 1 and projects pass-2/synthesize cost.
 
     Pass 1 itself costs money (card backfill + routing), so it is gated
@@ -411,7 +423,9 @@ async def run_estimate(
             non-interactive (the gate aborts).
 
     Returns:
-        ``(candidates, estimate)``.
+        ``(candidates, estimate, card_report)``. Files whose card generation
+        failed are included in ``candidates``, exactly as ``run_query`` would
+        send them to pass 2.
 
     Raises:
         BudgetExceededError: Pass-1 estimate over threshold, not confirmed.
@@ -425,8 +439,9 @@ async def run_estimate(
     with CatalogStore(db_path) as store:
         pass1_estimate = _pass1_estimate(store, cache_dir, client, config)
         _check_budget_gate(pass1_estimate, config, confirm, "cataloging+routing")
-        await generate_cards(store, cache_dir, client, config)
+        card_report = await generate_cards(store, cache_dir, client, config)
         candidates = await route(question, definition, store, client, config)
+        _include_failed_cards(candidates, store.all_parseable_files(), card_report)
         tokens = [
             client.count_tokens(
                 TaskName.EXTRACT,
@@ -434,4 +449,4 @@ async def run_estimate(
             )
             for c in candidates
         ]
-        return candidates, estimate_query(tokens, config)
+        return candidates, estimate_query(tokens, config), card_report

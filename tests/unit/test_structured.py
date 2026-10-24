@@ -136,3 +136,51 @@ def test_openrouter_models_registered_at_init() -> None:
     # stripped name now resolves; no exception, no noise
     _, provider, _, _ = litellm.get_llm_provider(model="google/gemini-2.5-flash")
     assert provider == "openrouter"
+
+
+class _Findings(BaseModel):
+    verdict: bool
+    findings: list[dict[str, str]]
+
+
+_TRUNCATED = '{"verdict": true, "findings": [{"q": "one"}, {"q": "tw'
+
+
+def test_salvaged_truncation_is_reported() -> None:
+    client = FakeClient([_TRUNCATED])
+    seen: list[bool] = []
+    out = asyncio.run(
+        complete_structured(
+            client,  # type: ignore[arg-type]
+            TaskName.EXTRACT,
+            [],
+            _Findings,
+            on_truncated=lambda: seen.append(True),
+        )
+    )
+    assert out.findings == [{"q": "one"}]
+    assert seen == [True]
+
+
+def test_salvaged_truncation_logs_a_warning(caplog: pytest.LogCaptureFixture) -> None:
+    client = FakeClient([_TRUNCATED])
+    with caplog.at_level("WARNING", logger="corpusqa.llm"):
+        asyncio.run(
+            complete_structured(client, TaskName.EXTRACT, [], _Findings)  # type: ignore[arg-type]
+        )
+    assert any("truncated" in r.getMessage() for r in caplog.records)
+
+
+def test_complete_output_does_not_report_truncation() -> None:
+    client = FakeClient(['{"verdict": true, "findings": [{"q": "one"}]}'])
+    seen: list[bool] = []
+    asyncio.run(
+        complete_structured(
+            client,  # type: ignore[arg-type]
+            TaskName.EXTRACT,
+            [],
+            _Findings,
+            on_truncated=lambda: seen.append(True),
+        )
+    )
+    assert seen == []

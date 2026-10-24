@@ -72,28 +72,45 @@ class ExtractionResult(BaseModel):
 
 
 class PartialExtractionError(CorpusQAError):
-    """Some sections of a file failed; the verdict covers only the rest.
+    """Part of a file was not judged; the verdict covers only the rest.
 
-    Carries the merged result of the sections that succeeded so callers can
-    still show those findings. The file must be reported as failed and the
-    result never cached: the passage that mattered may be in a lost section.
+    Raised when sections failed outright or their output was truncated (only
+    the complete leading findings kept). Carries the merged result of what
+    survived so callers can still show those findings. The file must be
+    reported as failed and the result never cached: the passage that mattered
+    may be in what was lost.
 
     Attributes:
-        result: Merged extraction over the sections that succeeded.
+        result: Merged extraction over what survived.
         skipped: Number of sections that failed.
+        truncated: Number of sections whose output was truncated.
         total: Number of sections in the file.
     """
 
     def __init__(
-        self, result: ExtractionResult, skipped: int, total: int, last_error: str
+        self,
+        result: ExtractionResult,
+        total: int,
+        skipped: int = 0,
+        last_error: str | None = None,
+        truncated: int = 0,
     ) -> None:
-        """Initializes the error with the partial result and failure counts."""
-        super().__init__(
-            f"{skipped} of {total} sections failed extraction; the verdict "
-            f"covers only the rest (last error: {last_error})"
-        )
+        """Initializes the error with the partial result and loss counts."""
+        problems = []
+        if skipped:
+            problems.append(
+                f"{skipped} of {total} sections failed extraction "
+                f"(last error: {last_error})"
+            )
+        if truncated:
+            problems.append(
+                f"{truncated} of {total} sections had truncated output "
+                "(raise the extract task's max_tokens)"
+            )
+        super().__init__("; ".join(problems) + "; the verdict covers only the rest")
         self.result = result
         self.skipped = skipped
+        self.truncated = truncated
         self.total = total
 
 
@@ -526,6 +543,7 @@ async def extract_file(
     section_results: list[ExtractionResult] = []
     section_failures = 0
     last_error: CorpusQAError | None = None
+    truncation: list[None] = []  # one entry per section with truncated output
     for section in sections:
         system = (
             extract_prompt.SYSTEM
@@ -547,7 +565,11 @@ async def extract_file(
         ]
         try:
             result = await complete_structured(
-                client, TaskName.EXTRACT, messages, ExtractionResult
+                client,
+                TaskName.EXTRACT,
+                messages,
+                ExtractionResult,
+                on_truncated=lambda: truncation.append(None),
             )
         except CorpusQAError as exc:
             # One section's structured-output failure (e.g. a truncated JSON
@@ -593,9 +615,13 @@ async def extract_file(
             file_hash=file_hash, relevant=False, confidence=0.0, reasoning=""
         )
     merged = _merge_sections(file_hash, section_results)
-    if section_failures:
+    if section_failures or truncation:
         raise PartialExtractionError(
-            merged, section_failures, len(sections), str(last_error)
+            merged,
+            total=len(sections),
+            skipped=section_failures,
+            last_error=str(last_error) if last_error is not None else None,
+            truncated=len(truncation),
         )
     return merged
 

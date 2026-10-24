@@ -226,8 +226,8 @@ def test_estimate_command_names_unpriced_tasks(
 
     async def fake_estimate(
         *_: object, **__: object
-    ) -> tuple[list[object], CostEstimate]:
-        return [], CostEstimate(unpriced_tasks=("catalog_summarize",))
+    ) -> tuple[list[object], CostEstimate, CardReport]:
+        return [], CostEstimate(unpriced_tasks=("catalog_summarize",)), CardReport()
 
     monkeypatch.setattr(cli, "run_estimate", fake_estimate)
     cli.main(["estimate", "q", ".", "--config", str(EXAMPLE), "--yes"])

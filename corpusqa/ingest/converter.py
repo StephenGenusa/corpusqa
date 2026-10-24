@@ -10,6 +10,7 @@ LibreOffice headless when a ``soffice`` binary is on PATH, else flagged
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
 import tempfile
@@ -29,6 +30,7 @@ _SOFFICE_TIMEOUT_S = 120
 # when rebuilding the page map; long enough to be unique, short enough to
 # survive minor export reflow.
 _PAGE_ANCHOR_CHARS = 40
+_log = logging.getLogger("corpusqa.ingest")
 
 STATUS_OK = "ok"
 STATUS_ZERO_TEXT = "zero_text"
@@ -207,17 +209,20 @@ def _build_page_map(document: DoclingDocument, markdown: str) -> list[tuple[int,
 
     ``export_to_markdown`` discards the per-item page numbers docling records,
     so we recover them: walk items in document order, locate each item's text in
-    the exported markdown, and emit a mark each time the page changes. Pages run
-    in order, so one locatable item per page is enough -- items whose text the
-    export reflowed past a plain search are simply skipped. Empty for sources
-    with no page provenance (md/txt) or scanned PDFs without a text layer.
+    the exported markdown at or after the previous match, and emit a mark each
+    time the page changes. Pages run in order, so one locatable item per page is
+    enough -- items not found ahead of the cursor (reflowed text, or a repeated
+    running header whose only match lies behind) are skipped, which keeps the
+    marks in page order. Empty for sources with no page provenance (md/txt) or
+    scanned PDFs without a text layer.
     """
     marks: list[tuple[int, int]] = []
     cursor = 0
     last_page: int | None = None
     try:
         items = list(document.iterate_items())
-    except Exception:  # noqa: BLE001 -- provenance is best-effort
+    except Exception as exc:  # noqa: BLE001 -- provenance is best-effort
+        _log.warning("page numbers unavailable: reading provenance failed: %s", exc)
         return marks
     for entry in items:
         item = entry[0] if isinstance(entry, tuple) else entry
@@ -233,14 +238,11 @@ def _build_page_map(document: DoclingDocument, markdown: str) -> list[tuple[int,
             continue
         pos = markdown.find(anchor, cursor)
         if pos < 0:
-            pos = markdown.find(anchor)  # tolerate slight reordering
-        if pos < 0:
             continue
         cursor = pos + len(anchor)
         if page != last_page:
             marks.append((pos, page))
             last_page = page
-    marks.sort()
     return marks
 
 

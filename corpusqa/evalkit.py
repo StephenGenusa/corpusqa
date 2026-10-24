@@ -210,7 +210,7 @@ async def run_pairs(
                 if total:
                     result.cite_validity = answer.resolved_cites / total
             else:
-                candidates, _ = await qp.run_estimate(
+                candidates, _, _ = await qp.run_estimate(
                     corpus_root,
                     pair.question,
                     config,
