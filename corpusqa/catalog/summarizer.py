@@ -13,6 +13,7 @@ from corpusqa.config.schema import AppConfig, TaskName
 from corpusqa.errors import CorpusQAError
 from corpusqa.llm.structured import complete_structured
 from corpusqa.llm.tasks import LLMTaskClient
+from corpusqa.splitting import split_within_token_budget
 
 if TYPE_CHECKING:  # store imports CatalogCard from here; avoid a cycle
     from corpusqa.catalog.store import CatalogStore, FileRow
@@ -88,20 +89,10 @@ class CardReport:
     failed: list[tuple[str, str]] = field(default_factory=list)
 
 
-def card_budget_chars(config: AppConfig) -> int:
-    """Computes the markdown char budget for one card call.
-
-    Public because the pass-1 cost estimator must truncate identically to
-    ``generate_cards`` or its token counts diverge from real spend.
-    """
+def card_token_budget(config: AppConfig) -> int:
+    """Returns the input-token budget for the document part of one card call."""
     window = config.tasks[TaskName.CATALOG_SUMMARIZE].context_window
-    usable = max(window - _PROMPT_OVERHEAD_TOKENS, 1_000)
-    return usable * 4  # ~4 chars/token; conservative for budgeting
-
-
-def _chunk_for_cards(markdown: str, budget: int) -> list[str]:
-    """Splits markdown into budget-sized character chunks for map-reduce."""
-    return [markdown[i : i + budget] for i in range(0, len(markdown), budget)]
+    return max(window - _PROMPT_OVERHEAD_TOKENS, 1_000)
 
 
 def _dedup(items: list[str]) -> list[str]:
@@ -190,15 +181,19 @@ async def generate_cards(
     """
     pending = store.files_needing_cards()
     report = CardReport()
-    budget = card_budget_chars(config)
+    budget = card_token_budget(config)
+
+    def count(text: str) -> int:
+        return client.count_tokens(TaskName.CATALOG_SUMMARIZE, text)
 
     async def one(row: FileRow) -> None:
         try:
             markdown = (cache_dir / f"{row.file_hash}.md").read_text(encoding="utf-8")
-            if len(markdown) > budget:
-                # Too big for one pass: summarize each budget-sized chunk, then
+            if count(markdown) > budget:
+                # Too big for one pass: summarize each chunk (sized by the real
+                # tokenizer, so dense text cannot overflow the window), then
                 # merge the partial cards deterministically (no extra LLM call).
-                chunks = _chunk_for_cards(markdown, budget)
+                chunks = split_within_token_budget(markdown, budget, count)
                 partials = await asyncio.gather(
                     *(_card_for_text(client, row.rel_path, c) for c in chunks)
                 )

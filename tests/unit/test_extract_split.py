@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from corpusqa.query.extractor import split_markdown
+from corpusqa.splitting import split_markdown
 
 
 def test_small_text_is_one_section() -> None:

@@ -134,3 +134,18 @@ def test_estimate_exits_partial_when_cards_failed(monkeypatch: object) -> None:
         cli.main(["estimate", "q", ".", "--config", EXAMPLE, "--yes"])
         == cli.EXIT_PARTIAL
     )
+
+
+def test_explain_file_outside_corpus_exits_one(tmp_path: Path) -> None:
+    from corpusqa.catalog.store import CatalogStore
+    from corpusqa.ingest.pipeline import index_paths
+
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    index_dir, db_path, _ = index_paths(corpus)
+    index_dir.mkdir()
+    CatalogStore(db_path).close()
+    outside = tmp_path / "elsewhere.pdf"
+    outside.write_text("x", encoding="utf-8")
+    code = main(["explain", str(outside), str(corpus), "--config", EXAMPLE])
+    assert code == EXIT_USER_ERROR

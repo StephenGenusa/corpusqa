@@ -326,7 +326,8 @@ class MockTaskClient:
                 )
             text = json.dumps({"decisions": decisions})
         elif task is TaskName.EXTRACT:
-            file_hash = re.search(r"hash (\w+)", user).group(1)  # type: ignore[union-attr]
+            hash_match = re.search(r"hash (\w+)", user)
+            file_hash = hash_match.group(1) if hash_match else ""
             heading = re.search(r"^##\s+(.+)$", user, re.MULTILINE)
             text = json.dumps(
                 {

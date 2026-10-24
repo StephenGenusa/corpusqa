@@ -12,7 +12,7 @@ from corpusqa.catalog.summarizer import (
     CatalogCard,
     TermUse,
     _merge_cards,
-    card_budget_chars,
+    card_token_budget,
     generate_cards,
 )
 from corpusqa.config.schema import TaskName
@@ -85,12 +85,13 @@ class _Client:
 
 def test_oversize_file_is_chunked_and_merged() -> None:
     cfg = _cfg()
-    budget = card_budget_chars(cfg)
+    budget = card_token_budget(cfg)
     row = types.SimpleNamespace(file_hash="h", rel_path="big.md")
     client = _Client()
     with tempfile.TemporaryDirectory() as d:
         cache = pathlib.Path(d)
-        (cache / "h.md").write_text("A" * (budget * 3 + 10), encoding="utf-8")
+        # _Client counts ~4 chars/token: about 3x the token budget.
+        (cache / "h.md").write_text("A" * (budget * 4 * 3 + 40), encoding="utf-8")
         report = asyncio.run(generate_cards(_Store([row]), cache, client, cfg))
     assert report.generated == 1
     assert report.hierarchical == 1
@@ -108,3 +109,32 @@ def test_small_file_uses_single_call() -> None:
     assert report.generated == 1
     assert report.hierarchical == 0
     assert client.calls == 1
+
+
+class _DenseClient(_Client):
+    """Tokenizes at 1 char/token: denser than any chars-per-token proxy."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.sent: list[str] = []
+
+    def count_tokens(self, task: TaskName, text: str) -> int:
+        return max(1, len(text))
+
+    async def complete(self, task, messages, **kw):
+        self.sent.append(messages[-1]["content"])
+        return await super().complete(task, messages, **kw)
+
+
+def test_dense_file_is_split_by_real_token_count() -> None:
+    cfg = _cfg()
+    window = cfg.tasks[TaskName.CATALOG_SUMMARIZE].context_window
+    client = _DenseClient()
+    row = types.SimpleNamespace(file_hash="h", rel_path="dense.md")
+    with tempfile.TemporaryDirectory() as d:
+        cache = pathlib.Path(d)
+        # Fewer chars than 4 x window, but more real tokens than the window.
+        (cache / "h.md").write_text("B" * (window * 2), encoding="utf-8")
+        report = asyncio.run(generate_cards(_Store([row]), cache, client, cfg))
+    assert report.generated == 1 and report.hierarchical == 1
+    assert all(len(text) < window for text in client.sent)  # each call fits

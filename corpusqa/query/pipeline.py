@@ -234,12 +234,7 @@ async def run_query(
 
     if all_files:
         mode = "sweep"
-    # The extraction-prompt fingerprint is in the key: a prompt edit must not
-    # keep serving verdicts the current prompt never produced.
-    question_hash = hashlib.sha256(
-        f"{question}\x00{definition or ''}\x00{relevance}\x00"
-        f"{extraction_fingerprint()}".encode()
-    ).hexdigest()
+    question_hash = _question_hash(question, definition, relevance)
 
     with CatalogStore(db_path) as store:
         parseable = store.all_parseable_files()
@@ -247,120 +242,24 @@ async def run_query(
             mode = (
                 "sweep" if len(parseable) <= config.query.sweep_threshold else "route"
             )
-
-        pass1_usd = 0.0
-        if mode == "sweep":
-            # no cards, no routing: every parseable file's raw text is judged
-            card_report = CardReport()
-            candidates = [Candidate(file=f, reason="sweep") for f in parseable]
-        else:
-            # Gate pass 1 BEFORE it spends: lazy card backfill (every
-            # uncarded file's markdown through the catalog model) plus
-            # routing was historically the largest unguarded cost.
-            pass1_estimate = _pass1_estimate(store, cache_dir, client, config)
-            _check_budget_gate(pass1_estimate, config, confirm, "cataloging+routing")
-            pass1_usd = pass1_estimate.total_usd
-            card_report = await generate_cards(store, cache_dir, client, config)
-            candidates = await route(question, definition, store, client, config)
-            _include_failed_cards(candidates, parseable, card_report)
-
-        extract_model = config.tasks[TaskName.EXTRACT].model
-        markdowns: dict[str, str] = {}
-        file_tokens: list[int] = []
-        cached_eval: dict[str, str | None] = {}
-        planned_sections: dict[str, list[str]] = {}
-        page_maps: dict[str, list[tuple[int, int]]] = {}
-        total_calls = 0
-        for cand in candidates:
-            h = cand.file.file_hash
-            md = (cache_dir / f"{h}.md").read_text(encoding="utf-8")
-            markdowns[h] = md
-            file_tokens.append(client.count_tokens(TaskName.EXTRACT, md))
-            cached_json = (
-                store.get_evaluation(question_hash, h, extract_model)
-                if use_cache
-                else None
-            )
-            cached_eval[h] = cached_json
-            # Only non-cached files do LLM work; plan their sections so the
-            # progress total reflects real calls (and reuse the split below).
-            if cached_json is None:
-                sections = plan_sections(md, client, config)
-                planned_sections[h] = sections
-                total_calls += len(sections)
-                page_maps[h] = _load_page_map(cache_dir, h)
-        estimate = estimate_query(file_tokens, config)
-
+        candidates, card_report, pass1_usd = await _select_candidates(
+            mode,
+            question,
+            definition,
+            store,
+            parseable,
+            cache_dir,
+            client,
+            config,
+            confirm,
+        )
+        plan = _plan_pass2(
+            candidates, store, cache_dir, client, config, question_hash, use_cache
+        )
+        estimate = estimate_query(plan.file_tokens, config)
         _check_budget_gate(
             estimate, config, confirm, "extraction+synthesis", prior_usd=pass1_usd
         )
-
-        failures: list[tuple[str, str]] = []
-        cached = 0
-        calls_done = 0
-        calls_ticked: dict[str, int] = {}
-
-        def _tick(file_hash: str) -> None:
-            nonlocal calls_done
-            calls_done += 1
-            calls_ticked[file_hash] = calls_ticked.get(file_hash, 0) + 1
-            if on_progress is not None and total_calls:
-                on_progress(calls_done, total_calls)
-
-        async def one(cand: Candidate) -> tuple[str, ExtractionResult] | None:
-            nonlocal cached, calls_done
-            h = cand.file.file_hash
-            try:
-                cached_json = cached_eval[h]
-                if cached_json is not None:
-                    result = ExtractionResult.model_validate_json(cached_json)
-                    cached += 1
-                else:
-                    fallback_served: list[Completion] = []
-                    result = await extract_file(
-                        question,
-                        definition,
-                        cand.file.rel_path,
-                        h,
-                        markdowns[h],
-                        client,
-                        config,
-                        relevance=relevance,
-                        sections=planned_sections[h],
-                        on_section=functools.partial(_tick, h),
-                        page_map=page_maps.get(h),
-                        on_completion=lambda c: (
-                            fallback_served.append(c) if c.fallback else None
-                        ),
-                    )
-                    # The key names the primary model; a verdict a fallback
-                    # model produced must not be served as the primary's.
-                    if not fallback_served:
-                        store.put_evaluation(
-                            run_id,
-                            question_hash,
-                            h,
-                            extract_model,
-                            result.model_dump_json(),
-                            question=question,
-                        )
-            except PartialExtractionError as exc:
-                # Show what survived, but report the file and never cache it.
-                failures.append((cand.file.rel_path, str(exc)))
-                result = exc.result
-            except CorpusQAError as exc:
-                failures.append((cand.file.rel_path, str(exc)))
-                return None
-            finally:
-                # If the file ended before all its planned sections ticked
-                # (e.g. a section raised), credit the remainder so the bar
-                # still reaches 100% rather than stalling short.
-                remaining = len(planned_sections.get(h, ())) - calls_ticked.get(h, 0)
-                if remaining > 0:
-                    calls_done += remaining
-                    if on_progress is not None and total_calls:
-                        on_progress(calls_done, total_calls)
-            return (cand.file.rel_path, result)
 
         _log.info(
             "run=%s mode=%s candidates=%d relevance=%s calls=%d",
@@ -368,20 +267,28 @@ async def run_query(
             mode,
             len(candidates),
             relevance,
-            total_calls,
+            plan.total_calls,
         )
-        # Show the bar at 0/total before work starts so the user sees scope.
-        if on_progress is not None and total_calls:
-            on_progress(0, total_calls)
-        gathered = await asyncio.gather(*(one(c) for c in candidates))
-        results = [g for g in gathered if g is not None]
+        runner = _Pass2Runner(
+            plan=plan,
+            store=store,
+            client=client,
+            config=config,
+            question=question,
+            definition=definition,
+            relevance=relevance,
+            run_id=run_id,
+            question_hash=question_hash,
+            on_progress=on_progress,
+        )
+        results = await runner.run(candidates)
         store.prune_evaluations(config.query.eval_retention_runs)
         _log.info(
             "run=%s relevant=%d cached=%d failures=%d",
             run_id,
             sum(1 for _, r in results if r.relevant),
-            cached,
-            len(failures),
+            runner.cached,
+            len(runner.failures),
         )
 
         answer = (
@@ -389,11 +296,7 @@ async def run_query(
             if synthesize_answer
             else None
         )
-
-        for task, (t_in, t_out, usd) in client.usage_by_task().items():
-            store.record_cost(
-                run_id, task.value, config.tasks[task].model, t_in, t_out, usd
-            )
+        _record_costs(store, run_id, client, config)
         return QueryReport(
             answer=answer,
             findings=results,
@@ -401,11 +304,218 @@ async def run_query(
             relevant_files=[p for p, r in results if r.relevant],
             estimate=estimate,
             card_report=card_report,
-            extraction_failures=failures,
+            extraction_failures=runner.failures,
             actual_usage=client.usage_by_task(),
             unpriced_calls=client.unpriced_by_task(),
             mode=mode,
-            cached_evaluations=cached,
+            cached_evaluations=runner.cached,
+        )
+
+
+def _question_hash(question: str, definition: str | None, relevance: str) -> str:
+    """Evaluation-cache key for one question under the current prompt.
+
+    The extraction-prompt fingerprint is part of it: a prompt edit must not
+    keep serving verdicts the current prompt never produced.
+    """
+    return hashlib.sha256(
+        f"{question}\x00{definition or ''}\x00{relevance}\x00"
+        f"{extraction_fingerprint()}".encode()
+    ).hexdigest()
+
+
+async def _select_candidates(
+    mode: str,
+    question: str,
+    definition: str | None,
+    store: CatalogStore,
+    parseable: list[FileRow],
+    cache_dir: Path,
+    client: LLMTaskClient,
+    config: AppConfig,
+    confirm: Callable[[CostEstimate], bool] | None,
+) -> tuple[list[Candidate], CardReport, float]:
+    """Picks the files pass 2 reads.
+
+    Sweep takes every parseable file with no LLM spend. Route gates pass 1
+    BEFORE it spends (lazy card backfill plus routing was historically the
+    largest unguarded cost), then routes and adds files whose card failed.
+
+    Returns:
+        ``(candidates, card_report, pass1_projected_usd)``.
+    """
+    if mode == "sweep":
+        return [Candidate(file=f, reason="sweep") for f in parseable], CardReport(), 0.0
+    pass1_estimate = _pass1_estimate(store, cache_dir, client, config)
+    _check_budget_gate(pass1_estimate, config, confirm, "cataloging+routing")
+    card_report = await generate_cards(store, cache_dir, client, config)
+    candidates = await route(question, definition, store, client, config)
+    _include_failed_cards(candidates, parseable, card_report)
+    return candidates, card_report, pass1_estimate.total_usd
+
+
+@dataclass
+class _Pass2Plan:
+    """Per-candidate inputs for extraction, prepared before the pass-2 gate.
+
+    Attributes:
+        markdowns: Cached markdown by file hash.
+        file_tokens: Extract-model token count per candidate, for the estimate.
+        cached_eval: Cached verdict JSON by file hash (None when not cached).
+        sections: Planned sections for each file that needs LLM work.
+        page_maps: Page marks for each file that needs LLM work.
+        total_calls: Extraction calls to make (for the progress total).
+    """
+
+    markdowns: dict[str, str] = field(default_factory=dict)
+    file_tokens: list[int] = field(default_factory=list)
+    cached_eval: dict[str, str | None] = field(default_factory=dict)
+    sections: dict[str, list[str]] = field(default_factory=dict)
+    page_maps: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+    total_calls: int = 0
+
+
+def _plan_pass2(
+    candidates: list[Candidate],
+    store: CatalogStore,
+    cache_dir: Path,
+    client: LLMTaskClient,
+    config: AppConfig,
+    question_hash: str,
+    use_cache: bool,
+) -> _Pass2Plan:
+    """Loads each candidate's markdown and cached verdict; plans the rest.
+
+    Only non-cached files do LLM work; their sections are planned here so the
+    progress total reflects real calls, and the same split is reused below.
+    """
+    extract_model = config.tasks[TaskName.EXTRACT].model
+    plan = _Pass2Plan()
+    for cand in candidates:
+        h = cand.file.file_hash
+        md = (cache_dir / f"{h}.md").read_text(encoding="utf-8")
+        plan.markdowns[h] = md
+        plan.file_tokens.append(client.count_tokens(TaskName.EXTRACT, md))
+        cached_json = (
+            store.get_evaluation(question_hash, h, extract_model) if use_cache else None
+        )
+        plan.cached_eval[h] = cached_json
+        if cached_json is None:
+            sections = plan_sections(md, client, config)
+            plan.sections[h] = sections
+            plan.total_calls += len(sections)
+            plan.page_maps[h] = _load_page_map(cache_dir, h)
+    return plan
+
+
+@dataclass
+class _Pass2Runner:
+    """Runs extraction over all candidates concurrently, with progress.
+
+    Attributes:
+        failures: ``(rel_path, error)`` for files that failed or were partial.
+        cached: Files answered from the evaluation cache.
+    """
+
+    plan: _Pass2Plan
+    store: CatalogStore
+    client: LLMTaskClient
+    config: AppConfig
+    question: str
+    definition: str | None
+    relevance: str
+    run_id: str
+    question_hash: str
+    on_progress: Callable[[int, int], None] | None
+    failures: list[tuple[str, str]] = field(default_factory=list)
+    cached: int = 0
+    _calls_done: int = 0
+    _calls_ticked: dict[str, int] = field(default_factory=dict)
+
+    async def run(
+        self, candidates: list[Candidate]
+    ) -> list[tuple[str, ExtractionResult]]:
+        """Extracts every candidate; returns results for those that produced one."""
+        # Show the bar at 0/total before work starts so the user sees scope.
+        self._report_progress()
+        gathered = await asyncio.gather(*(self._one(c) for c in candidates))
+        return [g for g in gathered if g is not None]
+
+    def _report_progress(self) -> None:
+        if self.on_progress is not None and self.plan.total_calls:
+            self.on_progress(self._calls_done, self.plan.total_calls)
+
+    def _tick(self, file_hash: str) -> None:
+        self._calls_done += 1
+        self._calls_ticked[file_hash] = self._calls_ticked.get(file_hash, 0) + 1
+        self._report_progress()
+
+    async def _one(self, cand: Candidate) -> tuple[str, ExtractionResult] | None:
+        h = cand.file.file_hash
+        try:
+            cached_json = self.plan.cached_eval[h]
+            if cached_json is not None:
+                result = ExtractionResult.model_validate_json(cached_json)
+                self.cached += 1
+            else:
+                result = await self._extract(cand)
+        except PartialExtractionError as exc:
+            # Show what survived, but report the file and never cache it.
+            self.failures.append((cand.file.rel_path, str(exc)))
+            result = exc.result
+        except CorpusQAError as exc:
+            self.failures.append((cand.file.rel_path, str(exc)))
+            return None
+        finally:
+            # If the file ended before all its planned sections ticked (e.g. a
+            # section raised), credit the remainder so the bar still reaches
+            # 100% rather than stalling short.
+            planned = len(self.plan.sections.get(h, ()))
+            remaining = planned - self._calls_ticked.get(h, 0)
+            if remaining > 0:
+                self._calls_done += remaining
+                self._report_progress()
+        return (cand.file.rel_path, result)
+
+    async def _extract(self, cand: Candidate) -> ExtractionResult:
+        """Runs extraction for one uncached file and caches a clean verdict."""
+        h = cand.file.file_hash
+        fallback_served: list[Completion] = []
+        result = await extract_file(
+            self.question,
+            self.definition,
+            cand.file.rel_path,
+            h,
+            self.plan.markdowns[h],
+            self.client,
+            self.config,
+            relevance=self.relevance,
+            sections=self.plan.sections[h],
+            on_section=functools.partial(self._tick, h),
+            page_map=self.plan.page_maps.get(h),
+            on_completion=lambda c: fallback_served.append(c) if c.fallback else None,
+        )
+        # The key names the primary model; a verdict a fallback model
+        # produced must not be served as the primary's.
+        if not fallback_served:
+            self.store.put_evaluation(
+                self.run_id,
+                self.question_hash,
+                h,
+                self.config.tasks[TaskName.EXTRACT].model,
+                result.model_dump_json(),
+                question=self.question,
+            )
+        return result
+
+
+def _record_costs(
+    store: CatalogStore, run_id: str, client: LLMTaskClient, config: AppConfig
+) -> None:
+    """Persists this run's actual per-task usage."""
+    for task, (t_in, t_out, usd) in client.usage_by_task().items():
+        store.record_cost(
+            run_id, task.value, config.tasks[task].model, t_in, t_out, usd
         )
 
 

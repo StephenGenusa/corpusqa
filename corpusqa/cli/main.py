@@ -262,7 +262,6 @@ def _cmd_explain(args: argparse.Namespace, config: AppConfig) -> int:
     import json
 
     from corpusqa.catalog.store import CatalogStore
-    from corpusqa.ingest.pipeline import index_paths
 
     del config
     corpus = args.directory.resolve()
@@ -270,7 +269,11 @@ def _cmd_explain(args: argparse.Namespace, config: AppConfig) -> int:
     if not db_path.exists():
         print(f"error: no index at {corpus}", file=sys.stderr)
         return EXIT_USER_ERROR
-    rel = args.file.resolve().relative_to(corpus).as_posix()
+    try:
+        rel = args.file.resolve().relative_to(corpus).as_posix()
+    except ValueError:
+        print(f"error: {args.file} is not inside the corpus {corpus}", file=sys.stderr)
+        return EXIT_USER_ERROR
     with CatalogStore(db_path) as store:
         file_hash = store.known_files().get(rel)
         if file_hash is None:

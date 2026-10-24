@@ -16,7 +16,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from corpusqa.query.extractor import ExtractionResult, _normalize_for_match
+from corpusqa.query.extractor import ExtractionResult, unique_relevant_findings
 
 
 @dataclass(frozen=True)
@@ -44,36 +44,20 @@ def collect_hits(
 ) -> list[Hit]:
     """Flattens relevant findings into deduplicated hits, in document order.
 
-    Overlapping sections of a large file routinely surface the same passage
-    more than once; duplicates are collapsed per file by normalized quote
-    (falling back to the claim when a quote is empty), matching how synthesis
-    numbers evidence so the two views stay consistent.
+    Deduplication is shared with synthesis (``unique_relevant_findings``) so
+    the two views stay consistent.
     """
-    hits: list[Hit] = []
-    seen: set[tuple[str, str]] = set()
-    for rel_path, result in results:
-        if not result.relevant:
-            continue
-        for finding in result.findings:
-            norm_quote, _ = _normalize_for_match(finding.quote)
-            key = (
-                rel_path,
-                norm_quote or f"claim:{finding.claim.strip().casefold()}",
-            )
-            if key in seen:
-                continue
-            seen.add(key)
-            hits.append(
-                Hit(
-                    rel_path=rel_path,
-                    heading_path=tuple(finding.heading_path),
-                    quote=finding.quote.strip(),
-                    claim=finding.claim.strip(),
-                    verified=finding.quote_verified,
-                    page_no=finding.page_no,
-                )
-            )
-    return hits
+    return [
+        Hit(
+            rel_path=rel_path,
+            heading_path=tuple(finding.heading_path),
+            quote=finding.quote.strip(),
+            claim=finding.claim.strip(),
+            verified=finding.quote_verified,
+            page_no=finding.page_no,
+        )
+        for rel_path, finding in unique_relevant_findings(results)
+    ]
 
 
 def _relevant_without_hits(

@@ -13,7 +13,7 @@ import json
 import logging
 import re
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 from pydantic import BaseModel, Field
 
@@ -22,6 +22,7 @@ from corpusqa.errors import CorpusQAError
 from corpusqa.llm.structured import complete_structured, schema_instruction
 from corpusqa.llm.tasks import Completion, LLMTaskClient
 from corpusqa.prompts import common as common_prompt
+from corpusqa.splitting import split_within_token_budget
 
 _log = logging.getLogger("corpusqa.query")
 
@@ -137,13 +138,6 @@ def extraction_fingerprint() -> str:
 
 
 _PROMPT_OVERHEAD_TOKENS = 2_000
-# Conservative chars-per-token for sizing the document portion of a section.
-# The previous value was an implicit 4 (English prose average); dense or
-# non-English text (scripture citation, transliterations, code, tables)
-# tokenizes below that, so a section sized at 4 chars/token can exceed the
-# window. 3 leaves structural margin; the real tokenizer is still consulted
-# per section below to hard-split anything that overflows regardless.
-_CHARS_PER_TOKEN = 3
 _MIN_SECTION_TOKENS = 1_000
 _HEADING_LINE_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")
 # Surface characters folded together during quote matching. PDF-to-markdown
@@ -377,82 +371,6 @@ def _heading_path_at(markdown: str, offset: int) -> list[str]:
     return [stack[lvl] for lvl in sorted(stack)]
 
 
-def split_markdown(markdown: str, max_chars: int) -> list[str]:
-    """Splits markdown into sections under ``max_chars``, heading-first.
-
-    Splits at the shallowest heading level that exists, recursively; falls
-    back to hard character splits only for heading-free oversize text.
-    Sections inherit their text verbatim (heading lines included), so
-    finding provenance is unchanged (design doc section 4.4).
-
-    Args:
-        markdown: The text to split.
-        max_chars: Maximum section size in characters.
-
-    Returns:
-        Ordered sections, each at most ``max_chars`` long.
-    """
-    if len(markdown) <= max_chars:
-        return [markdown]
-    for level in range(1, 7):
-        pattern = re.compile(rf"^(?={'#' * level}\s)", re.MULTILINE)
-        parts = [p for p in pattern.split(markdown) if p.strip()]
-        if len(parts) > 1:
-            out: list[str] = []
-            for part in parts:
-                out.extend(split_markdown(part, max_chars))
-            return out
-    return [markdown[i : i + max_chars] for i in range(0, len(markdown), max_chars)]
-
-
-def _hard_split_to_tokens(
-    text: str,
-    token_budget: int,
-    count_tokens: Callable[[str], int],
-) -> list[str]:
-    """Greedily splits ``text`` into fragments that each fit ``token_budget``.
-
-    Used only when a structurally-split section still exceeds the budget under
-    the real tokenizer (text denser than the char proxy). Grows a char window
-    to the largest prefix that fits, shrinking when it overshoots. Always makes
-    forward progress, so it terminates.
-    """
-    out: list[str] = []
-    start = 0
-    n = len(text)
-    approx = max(token_budget * _CHARS_PER_TOKEN, 1)
-    while start < n:
-        end = min(start + approx, n)
-        while end - start > 1 and count_tokens(text[start:end]) > token_budget:
-            end = start + max((end - start) // 2, 1)
-        out.append(text[start:end])
-        start = end
-    return out
-
-
-def _split_within_token_budget(
-    markdown: str,
-    token_budget: int,
-    count_tokens: Callable[[str], int],
-) -> list[str]:
-    """Splits markdown so every section fits ``token_budget`` real tokens.
-
-    First does the heading-aware structural split (via a char proxy), then
-    enforces the actual token budget per section, hard-splitting any that still
-    overflow. This decouples correctness from the chars-per-token estimate: the
-    estimate only affects how cleanly sections fall on heading boundaries, not
-    whether they fit the model window.
-    """
-    char_budget = max(token_budget * _CHARS_PER_TOKEN, 1)
-    sections: list[str] = []
-    for piece in split_markdown(markdown, char_budget):
-        if count_tokens(piece) <= token_budget:
-            sections.append(piece)
-        else:
-            sections.extend(_hard_split_to_tokens(piece, token_budget, count_tokens))
-    return sections
-
-
 def plan_sections(
     markdown: str,
     client: LLMTaskClient,
@@ -462,7 +380,8 @@ def plan_sections(
 
     Exposed so callers can size work (e.g. a progress total of total LLM
     calls) and pass the result straight into ``extract_file``, avoiding a
-    second split. Sizing rationale lives on ``_split_within_token_budget``.
+    second split. Sizing rationale lives on
+    ``corpusqa.splitting.split_within_token_budget``.
     """
     extract_cfg = config.tasks[TaskName.EXTRACT]
     # Document-token budget = window minus fixed prompt scaffolding (schema
@@ -476,7 +395,7 @@ def plan_sections(
         extract_cfg.context_window - _PROMPT_OVERHEAD_TOKENS - extract_cfg.max_tokens,
         _MIN_SECTION_TOKENS,
     )
-    return _split_within_token_budget(
+    return split_within_token_budget(
         markdown,
         doc_token_budget,
         lambda text: client.count_tokens(TaskName.EXTRACT, text),
@@ -528,8 +447,6 @@ async def extract_file(
         min over all sections (the file is irrelevant only if every
         section is, so the weakest negative verdict bounds the whole).
     """
-    from corpusqa.prompts import extract as extract_prompt
-
     if sections is None:
         sections = plan_sections(markdown, client, config)
     definition_block = common_prompt.definition_block(definition)
@@ -543,24 +460,9 @@ async def extract_file(
     last_error: CorpusQAError | None = None
     truncation: list[None] = []  # one entry per section with truncated output
     for section in sections:
-        system = (
-            extract_prompt.SYSTEM
-            + " "
-            + extract_prompt.RELEVANCE_INSTRUCTIONS[relevance]
+        messages = _section_messages(
+            question, definition_block, rel_path, file_hash, section, relevance
         )
-        messages = [
-            {"role": "system", "content": system},
-            {
-                "role": "user",
-                "content": extract_prompt.TEMPLATE.format(
-                    question=question,
-                    definition_block=definition_block,
-                    rel_path=rel_path,
-                    file_hash=file_hash,
-                    doc_markdown=section,
-                ),
-            },
-        ]
         try:
             result = await complete_structured(
                 client,
@@ -584,24 +486,7 @@ async def extract_file(
             if on_section is not None:
                 on_section()
             continue
-        for finding in result.findings:
-            spans = _match_spans(finding.quote, norm_source, source_map)
-            finding.quote_verified = bool(spans)
-            # Never show model-supplied provenance: an unlocated quote has no
-            # system-derived heading or page, so it carries neither.
-            finding.heading_path = []
-            finding.page_no = None
-            if spans:
-                # Snap the displayed quote to the EXACT source text the model
-                # pointed at (joined for an elided "A ... B" quote), so what the
-                # reader sees is verbatim from the file, not the model's wording.
-                finding.quote = _SNAP_SEPARATOR.join(
-                    markdown[start:end].strip() for start, end in spans
-                )
-                # Provenance is system-derived, not trusted from the model:
-                # real heading path and page from where the quote actually sits.
-                finding.heading_path = _heading_path_at(markdown, spans[0][0])
-                finding.page_no = _page_at(page_map, spans[0][0])
+        _snap_findings(result, markdown, norm_source, source_map, page_map)
         section_results.append(result)
         if on_section is not None:
             on_section()
@@ -625,6 +510,64 @@ async def extract_file(
     return merged
 
 
+def _section_messages(
+    question: str,
+    definition_block: str,
+    rel_path: str,
+    file_hash: str,
+    section: str,
+    relevance: str,
+) -> list[dict[str, str]]:
+    """Builds the chat messages for one section's extraction call."""
+    from corpusqa.prompts import extract as extract_prompt
+
+    system = (
+        extract_prompt.SYSTEM + " " + extract_prompt.RELEVANCE_INSTRUCTIONS[relevance]
+    )
+    return [
+        {"role": "system", "content": system},
+        {
+            "role": "user",
+            "content": extract_prompt.TEMPLATE.format(
+                question=question,
+                definition_block=definition_block,
+                rel_path=rel_path,
+                file_hash=file_hash,
+                doc_markdown=section,
+            ),
+        },
+    ]
+
+
+def _snap_findings(
+    result: ExtractionResult,
+    markdown: str,
+    norm_source: str,
+    source_map: list[int],
+    page_map: list[tuple[int, int]] | None,
+) -> None:
+    """Verifies each finding's quote against the source and sets provenance.
+
+    Never shows model-supplied provenance: an unlocated quote has no
+    system-derived heading or page, so it carries neither.
+    """
+    for finding in result.findings:
+        spans = _match_spans(finding.quote, norm_source, source_map)
+        finding.quote_verified = bool(spans)
+        finding.heading_path = []
+        finding.page_no = None
+        if spans:
+            # Snap the displayed quote to the EXACT source text the model
+            # pointed at (joined for an elided "A ... B" quote), so what the
+            # reader sees is verbatim from the file, not the model's wording.
+            finding.quote = _SNAP_SEPARATOR.join(
+                markdown[start:end].strip() for start, end in spans
+            )
+            # Real heading path and page from where the quote actually sits.
+            finding.heading_path = _heading_path_at(markdown, spans[0][0])
+            finding.page_no = _page_at(page_map, spans[0][0])
+
+
 def _merge_sections(
     file_hash: str, section_results: list[ExtractionResult]
 ) -> ExtractionResult:
@@ -644,6 +587,31 @@ def _merge_sections(
         confidence=min(r.confidence for r in section_results),
         reasoning=_merge_reasoning(section_results),
     )
+
+
+def unique_relevant_findings(
+    results: list[tuple[str, ExtractionResult]],
+) -> Iterator[tuple[str, Finding]]:
+    """Yields ``(rel_path, finding)`` for relevant files, duplicates collapsed.
+
+    Overlapping sections of a large file routinely surface the same passage
+    more than once. Duplicates are collapsed per file by normalized quote
+    (falling back to the claim when a quote is empty). The hit view and
+    synthesis both number evidence from this, so the two always agree.
+    """
+    seen: set[tuple[str, str]] = set()
+    for rel_path, result in results:
+        if not result.relevant:
+            continue
+        for finding in result.findings:
+            norm_quote, _ = _normalize_for_match(finding.quote)
+            key = (
+                rel_path,
+                norm_quote or f"claim:{finding.claim.strip().casefold()}",
+            )
+            if key not in seen:
+                seen.add(key)
+                yield rel_path, finding
 
 
 def _merge_reasoning(results: list[ExtractionResult]) -> str:

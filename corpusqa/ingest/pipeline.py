@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from corpusqa.catalog.store import CatalogStore, FileRow
 from corpusqa.config.schema import AppConfig
@@ -22,6 +23,9 @@ from corpusqa.ingest.discovery import (
     DriftKind,
     discover,
 )
+
+if TYPE_CHECKING:
+    from docling.document_converter import DocumentConverter
 
 _log = logging.getLogger("corpusqa.ingest")
 
@@ -87,9 +91,9 @@ def run_index(
         # every file: its model weights load on first use, so a per-file
         # converter reloads them each time. Lazy so an index with no parse
         # work (all unchanged) loads nothing.
-        converter_cache: list[object] = []
+        converter_cache: list[DocumentConverter] = []
 
-        def get_converter() -> object:
+        def get_converter() -> DocumentConverter:
             if not converter_cache:
                 converter_cache.append(
                     converter.build_converter(
@@ -143,7 +147,7 @@ def _convert_one(
     item: DiscoveredFile,
     config: AppConfig,
     report: IndexReport,
-    document_converter: object | None = None,
+    document_converter: DocumentConverter | None = None,
 ) -> None:
     """Converts, caches, and stores one file."""
     source = corpus_root / item.rel_path
@@ -153,7 +157,7 @@ def _convert_one(
         cache_dir,
         config.ingest.ocr,
         pdf_backend=config.ingest.pdf_backend,
-        document_converter=document_converter,  # type: ignore[arg-type]
+        document_converter=document_converter,
     )
     store.upsert_file(
         FileRow(

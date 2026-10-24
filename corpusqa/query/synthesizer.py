@@ -19,7 +19,7 @@ from corpusqa.prompts import synthesize as synth_prompt
 from corpusqa.query.extractor import (
     ExtractionResult,
     Finding,
-    _normalize_for_match,
+    unique_relevant_findings,
 )
 
 _CITE_RE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
@@ -79,24 +79,12 @@ def number_evidence(
     Returns:
         Numbered evidence in stable order.
     """
-    evidence: list[Evidence] = []
-    seen: set[tuple[str, str]] = set()
-    for rel_path, result in results:
-        if not result.relevant:
-            continue
-        for finding in result.findings:
-            norm_quote, _ = _normalize_for_match(finding.quote)
-            key = (
-                rel_path,
-                norm_quote or f"claim:{finding.claim.strip().casefold()}",
-            )
-            if key in seen:
-                continue
-            seen.add(key)
-            evidence.append(
-                Evidence(number=len(evidence) + 1, rel_path=rel_path, finding=finding)
-            )
-    return evidence
+    return [
+        Evidence(number=n, rel_path=rel_path, finding=finding)
+        for n, (rel_path, finding) in enumerate(
+            unique_relevant_findings(results), start=1
+        )
+    ]
 
 
 def _heading_is_filename(heading: str, rel_path: str) -> bool:
@@ -433,19 +421,13 @@ async def _condense_evidence(
     digests: list[str] = []
     for group in _pack_by_tokens(blocks, budget_tokens, client):
         batch = [evidence[i] for i in group]
-        completion = await client.complete(
-            TaskName.SYNTHESIZE,
-            [
-                {"role": "system", "content": synth_prompt.PARTIAL_SYSTEM},
-                {
-                    "role": "user",
-                    "content": synth_prompt.PARTIAL_TEMPLATE.format(
-                        question=question, evidence_block=_evidence_block(batch)
-                    ),
-                },
-            ],
+        digest = await _condense_call(
+            synth_prompt.PARTIAL_TEMPLATE.format(
+                question=question, evidence_block=_evidence_block(batch)
+            ),
+            client,
         )
-        digests.append(completion.text.strip() or _claims_digest(batch))
+        digests.append(digest or _claims_digest(batch))
     return digests
 
 
@@ -463,20 +445,24 @@ async def _condense_texts(
     out: list[str] = []
     for group in _pack_by_tokens(digests, budget_tokens, client):
         joined = "\n\n".join(digests[i] for i in group)
-        completion = await client.complete(
-            TaskName.SYNTHESIZE,
-            [
-                {"role": "system", "content": synth_prompt.PARTIAL_SYSTEM},
-                {
-                    "role": "user",
-                    "content": synth_prompt.DIGESTS_TEMPLATE.format(
-                        question=question, digests=joined
-                    ),
-                },
-            ],
+        digest = await _condense_call(
+            synth_prompt.DIGESTS_TEMPLATE.format(question=question, digests=joined),
+            client,
         )
-        out.append(completion.text.strip() or joined[: budget_tokens * 4])
+        out.append(digest or joined[: budget_tokens * 4])
     return out
+
+
+async def _condense_call(user_content: str, client: LLMTaskClient) -> str:
+    """Runs one condense completion; returns its stripped text ("" if empty)."""
+    completion = await client.complete(
+        TaskName.SYNTHESIZE,
+        [
+            {"role": "system", "content": synth_prompt.PARTIAL_SYSTEM},
+            {"role": "user", "content": user_content},
+        ],
+    )
+    return completion.text.strip()
 
 
 def _claims_digest(items: list[Evidence]) -> str:

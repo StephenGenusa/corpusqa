@@ -226,20 +226,7 @@ class CatalogStore:
         rows = self._conn.execute(
             "SELECT * FROM files WHERE parse_status != 'ok' ORDER BY rel_path"
         ).fetchall()
-        return [
-            FileRow(
-                file_hash=r["file_hash"],
-                rel_path=r["rel_path"],
-                size_bytes=r["size_bytes"],
-                format=r["format"],
-                parsed_at=r["parsed_at"],
-                parse_status=r["parse_status"],
-                parse_error=r["parse_error"],
-                md_cache_path=r["md_cache_path"],
-                page_count=r["page_count"],
-            )
-            for r in rows
-        ]
+        return [self._to_file_row(r) for r in rows]
 
     def file_count(self) -> int:
         """Returns the number of indexed files."""
