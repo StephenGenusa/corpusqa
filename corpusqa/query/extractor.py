@@ -145,10 +145,7 @@ _PROMPT_OVERHEAD_TOKENS = 2_000
 # per section below to hard-split anything that overflows regardless.
 _CHARS_PER_TOKEN = 3
 _MIN_SECTION_TOKENS = 1_000
-_HEADING_RE = re.compile(r"^(#{1,6})\s", re.MULTILINE)
 _HEADING_LINE_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")
-_WS_RE = re.compile(r"\s+")
-
 # Surface characters folded together during quote matching. PDF-to-markdown
 # extraction routinely substitutes these for their ASCII equivalents, and the
 # model quotes the clean reading; folding them lets a genuine quote verify.
@@ -244,19 +241,6 @@ def _normalize_for_match(text: str) -> tuple[str, list[int]]:
     return "".join(out), idx
 
 
-def _quote_in_source(quote: str, source: str) -> bool:
-    """Reports whether ``quote`` occurs in ``source`` under robust folding.
-
-    The folding (see ``_normalize_for_match``) absorbs the systematic
-    differences between a clean model quote and raw PDF-derived markdown
-    (ligatures, smart quotes, dashes, hyphenation, emphasis, whitespace, case)
-    so that genuinely grounded quotes verify while paraphrases still do not.
-    An empty quote can never be verified.
-    """
-    norm_source, source_map = _normalize_for_match(source)
-    return bool(_match_spans(quote, norm_source, source_map))
-
-
 def _quote_fragments(quote: str) -> list[str]:
     """Normalized, decoration-stripped fragments of a model quote.
 
@@ -349,12 +333,6 @@ def _match_spans(
         spans.append(_span_at(norm_source, source_map, pos, len(fragment)))
         search_from = pos + len(fragment)
     return spans
-
-
-def _locate_quote(quote: str, norm_source: str, source_map: list[int]) -> int:
-    """Original-text start offset of ``quote``, or -1 (compat wrapper)."""
-    spans = _match_spans(quote, norm_source, source_map)
-    return spans[0][0] if spans else -1
 
 
 def _page_at(page_map: list[tuple[int, int]] | None, offset: int) -> int | None:

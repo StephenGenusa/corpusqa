@@ -49,10 +49,6 @@ class ConversionResult:
         parse_status: One of the ``STATUS_*`` constants.
         parse_error: Captured error text when status is not ``ok``.
         page_count: Source page count when the format is paginated, else None.
-        document: The in-memory DoclingDocument for same-pass chunking
-            (CONTRACT CHANGE M2-C2: HybridChunker consumes the document
-            object, not markdown, so chunking must happen at conversion time
-            or the document must be re-parsed later).
     """
 
     file_hash: str
@@ -60,7 +56,6 @@ class ConversionResult:
     parse_status: str
     parse_error: str | None
     page_count: int | None
-    document: Any | None = None  # DoclingDocument; Any keeps docling optional
 
 
 def check_converter_available() -> None:
@@ -333,5 +328,4 @@ def convert(
         parse_status=parse_status,
         parse_error=parse_error,
         page_count=page_count,
-        document=document,
     )

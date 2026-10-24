@@ -357,10 +357,6 @@ class MockTaskClient:
         self._ledger.setdefault(task, []).append(completion)
         return completion
 
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        """Returns zero vectors (vector channel arrives in M5)."""
-        return [[0.0] * 4 for _ in texts]
-
     def count_tokens(self, _task: TaskName, text: str) -> int:
         """~4 chars/token heuristic."""
         return max(1, len(text) // 4)

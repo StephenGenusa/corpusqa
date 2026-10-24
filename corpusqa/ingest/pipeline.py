@@ -15,7 +15,7 @@ from pathlib import Path
 
 from corpusqa.catalog.store import CatalogStore, FileRow
 from corpusqa.config.schema import AppConfig
-from corpusqa.ingest import chunker, converter
+from corpusqa.ingest import converter
 from corpusqa.ingest.discovery import (
     INDEX_DIR_NAME,
     DiscoveredFile,
@@ -38,7 +38,6 @@ class IndexReport:
         duplicates: On-disk copies of content owned by another path
             (identity is the content hash; copies are not indexed twice).
         flagged: ``(rel_path, parse_status)`` for non-ok conversions.
-        chunks_written: Total chunk rows written this run.
     """
 
     parsed: int = 0
@@ -47,7 +46,6 @@ class IndexReport:
     unchanged: int = 0
     duplicates: int = 0
     flagged: list[tuple[str, str]] = field(default_factory=list)
-    chunks_written: int = 0
 
 
 def index_paths(corpus_root: Path) -> tuple[Path, Path, Path]:
@@ -133,6 +131,7 @@ def run_index(
 def _delete(store: CatalogStore, cache_dir: Path, file_hash: str) -> None:
     """Removes a file's rows and cache artifacts."""
     store.delete_file(file_hash)
+    # .chunks.jsonl: left behind by indexes built before chunking was removed.
     for suffix in (".md", ".meta.json", ".chunks.jsonl", ".pages.json"):
         (cache_dir / f"{file_hash}{suffix}").unlink(missing_ok=True)
 
@@ -146,7 +145,7 @@ def _convert_one(
     report: IndexReport,
     document_converter: object | None = None,
 ) -> None:
-    """Converts, caches, stores, and chunks one file."""
+    """Converts, caches, and stores one file."""
     source = corpus_root / item.rel_path
     result = converter.convert(
         source,
@@ -179,19 +178,6 @@ def _convert_one(
     if result.parse_status != converter.STATUS_OK:
         report.flagged.append((item.rel_path, result.parse_status))
 
-    usable = (converter.STATUS_OK, converter.STATUS_PARTIAL)
-    if result.parse_status in usable and result.document is not None:
-        markdown = result.md_cache_path.read_text(encoding="utf-8")  # type: ignore[union-attr]
-        chunks = chunker.chunk_document(
-            result.document,
-            item.file_hash,
-            markdown,
-            config.ingest.chunk_target_tokens,
-        )
-        chunker.write_chunk_texts(chunks, cache_dir, item.file_hash)
-        store.replace_chunks(item.file_hash, chunks)
-        report.chunks_written += len(chunks)
-
 
 @dataclass(frozen=True)
 class StatusReport:
@@ -205,7 +191,6 @@ class StatusReport:
         duplicates: On-disk copies of content owned by another path.
         flagged: Files invisible or partially visible to queries.
         file_count: Indexed files.
-        chunk_count: Indexed chunk provenance rows.
     """
 
     meta: dict[str, object] | None
@@ -213,7 +198,6 @@ class StatusReport:
     duplicates: list[DiscoveredFile]
     flagged: list[FileRow]
     file_count: int
-    chunk_count: int
 
 
 def run_status(corpus_root: Path, config: AppConfig) -> StatusReport:
@@ -236,7 +220,6 @@ def run_status(corpus_root: Path, config: AppConfig) -> StatusReport:
             duplicates=[f for f in found if f.drift is DriftKind.DUPLICATE],
             flagged=[],
             file_count=0,
-            chunk_count=0,
         )
     with CatalogStore(db_path) as store:
         known = store.known_files()
@@ -251,5 +234,4 @@ def run_status(corpus_root: Path, config: AppConfig) -> StatusReport:
             duplicates=[f for f in found if f.drift is DriftKind.DUPLICATE],
             flagged=store.flagged_files(),
             file_count=store.file_count(),
-            chunk_count=store.chunk_count(),
         )

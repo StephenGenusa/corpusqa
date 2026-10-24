@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from corpusqa.catalog.store import CatalogStore, FileRow
-from corpusqa.ingest.chunker import Chunk
 
 
 def _row(file_hash: str = "h1", rel_path: str = "a.md") -> FileRow:
@@ -31,17 +30,24 @@ def test_upsert_known_and_meta(tmp_path: Path) -> None:
         assert meta is not None and meta["corpus_root"] == "/corpus"
 
 
-def test_delete_cascades_chunks(tmp_path: Path) -> None:
+def test_delete_file_removes_row(tmp_path: Path) -> None:
     with CatalogStore(tmp_path / "c.db") as store:
         store.upsert_file(_row())
-        store.replace_chunks(
-            "h1",
-            [Chunk("h1:0", "h1", 0, ["A"], None, 0, 5, "hello")],
-        )
-        assert store.chunk_count() == 1
         store.delete_file("h1")
-        assert store.chunk_count() == 0
         assert store.known_files() == {}
+
+
+def test_legacy_chunks_table_is_dropped(tmp_path: Path) -> None:
+    import sqlite3
+
+    db = tmp_path / "c.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE chunks (chunk_id TEXT PRIMARY KEY)")
+    with CatalogStore(db):
+        pass
+    with sqlite3.connect(db) as conn:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+    assert "chunks" not in tables
 
 
 def test_flagged_files_and_move(tmp_path: Path) -> None:

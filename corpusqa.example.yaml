@@ -39,7 +39,6 @@ tasks:
 ingest:
   ocr: "off"
   pdf_backend: "docling_parse"   # try "pypdfium" if large PDFs hit std::bad_alloc
-  chunk_target_tokens: 512
 
 budget:
   confirm_above_usd: 1.00

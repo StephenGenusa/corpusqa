@@ -226,10 +226,6 @@ class LLMTaskClient:
         _log.debug("response task=%s text=%r", task.value, completion.text)
         return completion
 
-    def task_model(self, task: TaskName) -> str:
-        """Returns the configured model string for a task."""
-        return self._task(task).model
-
     def context_window(self, task: TaskName) -> int:
         """Returns the configured (authoritative) window size for a task."""
         return self._task(task).context_window

@@ -131,7 +131,6 @@ tasks:
 
 ingest:
   ocr: "off"
-  chunk_target_tokens: 512
 
 budget:
   confirm_above_usd: 1.00
@@ -143,7 +142,7 @@ budget:
 ```bash
 # global: -v (call summaries on stderr)  -vv (full prompt/response capture in
 #         the run log under <dir>/.corpusqa/logs/)
-corpusqa index <dir> [--force FILE...]         # parse + chunk + catalog (incremental, LLM-free)
+corpusqa index <dir> [--force FILE...]         # parse + cache (incremental, LLM-free); cards are built on the first routed query
 corpusqa status <dir>                          # drift report + flagged files
 corpusqa estimate "<question>" <dir>           # candidates + projected cost, no spend
 corpusqa query "<question>" <dir>
@@ -201,7 +200,7 @@ For routing at scale (the >150-file regime `auto` mode actually routes), `tests/
 corpusqa/
 ├── cli/            # argument parsing + dispatch only (composition root)
 ├── config/         # Pydantic schema + fail-fast YAML loader
-├── ingest/         # discovery/hashing/drift, Docling wrapper, chunking, flags
+├── ingest/         # discovery/hashing/drift, Docling wrapper, page map, flags
 ├── catalog/        # SQLite store (sole SQL chokepoint), inventory-card generation
 ├── query/          # router, whole-file extractor, citation assembler, budget, pipeline
 ├── llm/            # LiteLLM chokepoint (tasks, structured output w/ repair retry)

@@ -43,9 +43,6 @@ class FakeClient:
         self._ledger.setdefault(task, []).append(completion)
         return completion
 
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        return [[0.0] * 4 for _ in texts]
-
     def count_tokens(self, task: TaskName, text: str) -> int:
         return max(1, len(text) // 4)
 

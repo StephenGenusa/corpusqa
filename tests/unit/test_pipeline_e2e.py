@@ -42,12 +42,17 @@ def test_index_then_status_then_drift(corpus: Path) -> None:
 
     report = run_index(corpus, config)
     assert report.parsed == 3 and not report.flagged
-    assert report.chunks_written >= 3
 
-    _, _, cache = index_paths(corpus)
+    _, db_path, cache = index_paths(corpus)
     md_files = list(cache.glob("*.md"))
     assert len(md_files) == 3
-    assert all((cache / f"{p.stem}.chunks.jsonl").exists() for p in md_files)
+    assert not list(cache.glob("*.chunks.jsonl"))  # no chunking pass at index
+
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
+    assert "chunks" not in tables
 
     status = run_status(corpus, config)
     assert status.file_count == 3 and not status.drift

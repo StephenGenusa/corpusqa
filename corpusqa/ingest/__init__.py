@@ -1,1 +1,1 @@
-"""Ingest: discovery, conversion, caching, flagging, chunking (M2)."""
+"""Ingest: discovery, conversion, caching, flagging (M2)."""

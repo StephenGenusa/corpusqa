@@ -44,7 +44,6 @@ def mock_converter(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
             parse_status=converter.STATUS_OK,
             parse_error=None,
             page_count=None,
-            document=None,  # document=None skips chunking; fine here
         )
 
     monkeypatch.setattr(pipeline.converter, "convert", fake_convert)

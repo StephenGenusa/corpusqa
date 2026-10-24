@@ -334,7 +334,7 @@ def _cmd_index(args: argparse.Namespace, config: AppConfig) -> int:
     print(
         f"parsed {report.parsed}, moved {report.moved}, "
         f"deleted {report.deleted}, unchanged {report.unchanged}, "
-        f"duplicates {report.duplicates}, chunks {report.chunks_written}"
+        f"duplicates {report.duplicates}"
     )
     if report.flagged:
         print("flagged (not fully visible to queries):", file=sys.stderr)
@@ -351,7 +351,7 @@ def _cmd_status(args: argparse.Namespace, config: AppConfig) -> int:
         print("no index found; run: corpusqa index <dir>")
     else:
         print(
-            f"indexed {report.file_count} files, {report.chunk_count} chunks; "
+            f"indexed {report.file_count} files; "
             f"last indexed {report.meta.get('last_indexed_at')}"
         )
     if report.drift:

@@ -7,7 +7,6 @@ file as work completes so every fan-out stage is crash-resumable
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -15,7 +14,6 @@ from pathlib import Path
 from types import TracebackType
 
 from corpusqa.catalog.summarizer import CatalogCard
-from corpusqa.ingest.chunker import Chunk
 
 SCHEMA_VERSION = 2
 
@@ -52,16 +50,6 @@ CREATE TABLE IF NOT EXISTS evaluations (
 CREATE INDEX IF NOT EXISTS idx_eval_lookup
     ON evaluations(question_hash, file_hash, model_used);
 CREATE INDEX IF NOT EXISTS idx_eval_run ON evaluations(run_id);
-
-CREATE TABLE IF NOT EXISTS chunks (
-    chunk_id     TEXT PRIMARY KEY,
-    file_hash    TEXT NOT NULL REFERENCES files(file_hash) ON DELETE CASCADE,
-    chunk_index  INTEGER NOT NULL,
-    heading_path TEXT NOT NULL,
-    page_no      INTEGER,
-    char_start   INTEGER NOT NULL,
-    char_end     INTEGER NOT NULL
-);
 
 CREATE TABLE IF NOT EXISTS index_meta (
     rowid_one        INTEGER PRIMARY KEY CHECK (rowid_one = 1),
@@ -128,12 +116,15 @@ class CatalogStore:
     def _migrate_if_needed(self) -> None:
         """Brings a pre-v2 database forward in place.
 
-        Two independent migrations, each guarded only by its own table's
+        Independent migrations, each guarded only by its own table's
         existence (they must not be nested: a DB can have an old-shape
         ``evaluations`` table without ``catalog_cards``, and the column add
         still has to run). Cards regenerate lazily, so dropping is cheap and
-        avoids ALTER gymnastics.
+        avoids ALTER gymnastics. The ``chunks`` table belonged to the removed
+        vector channel and is dropped outright.
         """
+        self._conn.execute("DROP TABLE IF EXISTS chunks")
+        self._conn.commit()
         cards = self._conn.execute(
             "SELECT name FROM sqlite_master WHERE name='catalog_cards'"
         ).fetchone()
@@ -212,40 +203,12 @@ class CatalogStore:
         self._conn.commit()
 
     def delete_file(self, file_hash: str) -> None:
-        """Removes a file row; cards and chunks cascade."""
+        """Removes a file row; its cards and evaluations cascade."""
         self._conn.execute("DELETE FROM files WHERE file_hash = ?", (file_hash,))
         self._conn.commit()
 
     @staticmethod
     def _to_file_row(row: sqlite3.Row) -> FileRow:
-        return FileRow(
-            file_hash=row["file_hash"],
-            rel_path=row["rel_path"],
-            size_bytes=row["size_bytes"],
-            format=row["format"],
-            parsed_at=row["parsed_at"],
-            parse_status=row["parse_status"],
-            parse_error=row["parse_error"],
-            md_cache_path=row["md_cache_path"],
-            page_count=row["page_count"],
-        )
-
-    def files_ok(self) -> list[FileRow]:
-        """Returns queryable files (ok or partial), ordered by path."""
-        rows = self._conn.execute(
-            """SELECT * FROM files
-               WHERE parse_status IN ('ok', 'partial_parse')
-               ORDER BY rel_path"""
-        ).fetchall()
-        return [self._to_file_row(r) for r in rows]
-
-    def get_file(self, file_hash: str) -> FileRow | None:
-        """Fetches one file row by hash."""
-        row = self._conn.execute(
-            "SELECT * FROM files WHERE file_hash = ?", (file_hash,)
-        ).fetchone()
-        if row is None:
-            return None
         return FileRow(
             file_hash=row["file_hash"],
             rel_path=row["rel_path"],
@@ -410,35 +373,6 @@ class CatalogStore:
             (run_id, task, model, tokens_in, tokens_out, cost_usd, _now()),
         )
         self._conn.commit()
-
-    # -- chunks -----------------------------------------------------------
-
-    def replace_chunks(self, file_hash: str, chunks: list[Chunk]) -> None:
-        """Replaces all chunk provenance rows for a file."""
-        self._conn.execute("DELETE FROM chunks WHERE file_hash = ?", (file_hash,))
-        self._conn.executemany(
-            """INSERT INTO chunks
-               (chunk_id, file_hash, chunk_index, heading_path, page_no,
-                char_start, char_end)
-               VALUES (?,?,?,?,?,?,?)""",
-            [
-                (
-                    c.chunk_id,
-                    c.file_hash,
-                    c.chunk_index,
-                    json.dumps(c.heading_path, ensure_ascii=False),
-                    c.page_no,
-                    c.char_start,
-                    c.char_end,
-                )
-                for c in chunks
-            ],
-        )
-        self._conn.commit()
-
-    def chunk_count(self) -> int:
-        """Returns the number of chunk provenance rows."""
-        return int(self._conn.execute("SELECT COUNT(*) FROM chunks").fetchone()[0])
 
     # -- meta -------------------------------------------------------------
 

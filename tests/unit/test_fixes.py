@@ -16,7 +16,7 @@ from corpusqa.config.schema import TaskName
 from corpusqa.errors import BudgetExceededError
 from corpusqa.query import pipeline as qp
 from corpusqa.query.budget import CostEstimate
-from corpusqa.query.extractor import Finding, _quote_in_source, extract_file
+from corpusqa.query.extractor import Finding, extract_file
 from corpusqa.query.synthesizer import Evidence, render_cite, resolve_citations
 from tests.unit.fakes import FakeClient
 
@@ -53,12 +53,6 @@ def test_short_fragments_not_flagged() -> None:
 
 
 # --- Fix 1b: quote verification ------------------------------------------
-
-
-def test_quote_in_source_normalizes_ws_and_case() -> None:
-    assert _quote_in_source("Community  GARDENS", "... community gardens ...")
-    assert not _quote_in_source("   ", "anything")
-    assert not _quote_in_source("absent phrase", "present text only")
 
 
 def test_render_cite_marks_unverified_source() -> None:

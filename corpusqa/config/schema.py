@@ -74,7 +74,6 @@ class IngestConfig(_StrictModel):
     pdf_backend: str = Field(
         default="docling_parse", pattern="^(docling_parse|pypdfium)$"
     )
-    chunk_target_tokens: int = Field(default=512, ge=64, le=4096)
     extensions: list[str] = Field(
         default_factory=lambda: [".pdf", ".docx", ".doc", ".md", ".markdown", ".txt"]
     )
