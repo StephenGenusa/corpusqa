@@ -116,7 +116,7 @@ def test_pipeline_reports_partial_file_shows_findings_and_skips_cache(
 
 def test_truncated_section_output_makes_the_file_partial() -> None:
     truncated = _reply("quick brown fox")[:-2] + ', {"claim": "d", "quo'
-    fake = FakeClient({TaskName.EXTRACT: [truncated]})
+    fake = FakeClient({TaskName.EXTRACT: [(truncated, "length")]})
     with pytest.raises(PartialExtractionError, match="truncated") as info:
         asyncio.run(
             extract_file(
@@ -130,4 +130,28 @@ def test_truncated_section_output_makes_the_file_partial() -> None:
                 sections=[SECTION_1],
             )
         )
+    assert [f.quote for f in info.value.result.findings] == ["quick brown fox"]
+
+
+def test_malformed_section_output_is_partial_and_not_blamed_on_max_tokens() -> None:
+    # Stopped normally but invalid twice (reply and repair): the complete
+    # findings are kept, the file is partial, and the message names the
+    # defect rather than sending the user to raise max_tokens.
+    malformed = _reply("quick brown fox")[:-2] + ', {"claim": "d", "page_no_null"]}'
+    fake = FakeClient({TaskName.EXTRACT: [malformed, malformed]})
+    with pytest.raises(PartialExtractionError, match="malformed") as info:
+        asyncio.run(
+            extract_file(
+                "q",
+                None,
+                "a.md",
+                "h",
+                SECTION_1,
+                fake,  # type: ignore[arg-type]
+                load_config(EXAMPLE),
+                sections=[SECTION_1],
+            )
+        )
+    assert "max_tokens" not in str(info.value)
+    assert info.value.malformed == 1
     assert [f.quote for f in info.value.result.findings] == ["quick brown fox"]

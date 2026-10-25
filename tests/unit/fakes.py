@@ -9,11 +9,15 @@ from corpusqa.llm.tasks import Completion
 
 
 class FakeClient:
-    """Returns scripted replies per task, FIFO; counts tokens by ~4 chars."""
+    """Returns scripted replies per task, FIFO; counts tokens by ~4 chars.
+
+    A reply is its text, or ``(text, finish_reason)``; plain text stops
+    normally.
+    """
 
     def __init__(
         self,
-        scripts: dict[TaskName, list[str]],
+        scripts: dict[TaskName, list[str | tuple[str, str]]],
         unpriced: set[TaskName] | None = None,
         fallback: set[TaskName] | None = None,
     ) -> None:
@@ -28,9 +32,10 @@ class FakeClient:
     ) -> Completion:
         self.calls.setdefault(task, []).append(messages)
         try:
-            text = self._scripts[task].pop(0)
+            reply = self._scripts[task].pop(0)
         except (KeyError, IndexError) as exc:
             raise AssertionError(f"no scripted reply left for {task}") from exc
+        text, finish = reply if isinstance(reply, tuple) else (reply, "stop")
         completion = Completion(
             text=text,
             model=f"fake-{task.value}",
@@ -39,6 +44,7 @@ class FakeClient:
             cost_usd=0.0 if task in self._unpriced else 0.001,
             priced=task not in self._unpriced,
             fallback=task in self._fallback,
+            finish_reason=finish,
         )
         self._ledger.setdefault(task, []).append(completion)
         return completion

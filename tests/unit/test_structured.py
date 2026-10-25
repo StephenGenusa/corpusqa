@@ -26,7 +26,8 @@ class _Out(BaseModel):
 class FakeClient:
     """Stands in for LLMTaskClient at the single mock seam."""
 
-    def __init__(self, replies: list[str]) -> None:
+    def __init__(self, replies: list[str | tuple[str, str]]) -> None:
+        # a reply is its text, or (text, finish_reason)
         self._replies = list(replies)
         self.calls: list[list[dict[str, str]]] = []
 
@@ -34,12 +35,15 @@ class FakeClient:
         self, task: TaskName, messages: list[dict[str, str]], **_: Any
     ) -> Completion:
         self.calls.append(messages)
+        reply = self._replies.pop(0)
+        text, finish = reply if isinstance(reply, tuple) else (reply, "stop")
         return Completion(
-            text=self._replies.pop(0),
+            text=text,
             model="fake",
             tokens_in=1,
             tokens_out=1,
             cost_usd=0.0,
+            finish_reason=finish,
         )
 
 
@@ -143,7 +147,12 @@ class _Findings(BaseModel):
     findings: list[dict[str, str]]
 
 
-_TRUNCATED = '{"verdict": true, "findings": [{"q": "one"}, {"q": "tw'
+_TRUNCATED = ('{"verdict": true, "findings": [{"q": "one"}, {"q": "tw', "length")
+# Gemma's actual failure: a finding mangled mid-object, then stopped normally.
+_MALFORMED = (
+    '{"verdict": true, "findings": [{"q": "one"}, {"q": "two", "page_no_null"]}'
+)
+_VALID = '{"verdict": true, "findings": [{"q": "one"}, {"q": "two"}]}'
 
 
 def test_salvaged_truncation_is_reported() -> None:
@@ -184,3 +193,62 @@ def test_complete_output_does_not_report_truncation() -> None:
         )
     )
     assert seen == []
+
+
+def test_malformed_output_gets_a_repair_turn_not_a_salvage() -> None:
+    # A reply that stopped normally but is invalid is a JSON defect: the
+    # repair turn can recover every finding, where a salvage drops some.
+    client = FakeClient([_MALFORMED, _VALID])
+    seen: list[str] = []
+    out = asyncio.run(
+        complete_structured(
+            client,  # type: ignore[arg-type]
+            TaskName.EXTRACT,
+            [],
+            _Findings,
+            on_truncated=lambda: seen.append("truncated"),
+            on_malformed=lambda: seen.append("malformed"),
+        )
+    )
+    assert len(client.calls) == 2
+    assert out.findings == [{"q": "one"}, {"q": "two"}]
+    assert seen == []
+
+
+def test_malformed_after_repair_keeps_complete_findings_as_malformed(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    client = FakeClient([_MALFORMED, _MALFORMED])
+    seen: list[str] = []
+    with caplog.at_level("WARNING", logger="corpusqa.llm"):
+        out = asyncio.run(
+            complete_structured(
+                client,  # type: ignore[arg-type]
+                TaskName.EXTRACT,
+                [],
+                _Findings,
+                on_truncated=lambda: seen.append("truncated"),
+                on_malformed=lambda: seen.append("malformed"),
+            )
+        )
+    assert out.findings == [{"q": "one"}]
+    assert seen == ["malformed"]
+    assert "malformed" in caplog.text
+    assert "truncated" not in caplog.text and "max_tokens" not in caplog.text
+
+
+def test_length_stop_is_salvaged_without_a_repair_turn() -> None:
+    client = FakeClient([_TRUNCATED])
+    seen: list[str] = []
+    asyncio.run(
+        complete_structured(
+            client,  # type: ignore[arg-type]
+            TaskName.EXTRACT,
+            [],
+            _Findings,
+            on_truncated=lambda: seen.append("truncated"),
+            on_malformed=lambda: seen.append("malformed"),
+        )
+    )
+    assert len(client.calls) == 1
+    assert seen == ["truncated"]

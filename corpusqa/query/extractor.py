@@ -78,10 +78,38 @@ class ExtractionResult(BaseModel):
     findings: list[Finding] = Field(default_factory=list)
 
 
+# What the extract model is shown and writes. Heading path, page number and
+# quote verification are system-derived and the file hash is known, so they
+# are left out: listed, the model writes them anyway (wasted output, and a
+# failure surface), and developer docstrings in a schema are not instructions.
+# No docstrings here for the same reason: they would be sent as descriptions.
+class _ModelFinding(BaseModel):
+    claim: str
+    quote: str
+
+
+class _ModelVerdict(BaseModel):
+    relevant: bool
+    confidence: float = Field(ge=0.0, le=1.0)
+    reasoning: str = ""
+    findings: list[_ModelFinding] = Field(default_factory=list)
+
+    def to_result(self, file_hash: str) -> ExtractionResult:
+        """Builds the full result; snapping fills the system-derived fields."""
+        return ExtractionResult(
+            file_hash=file_hash,
+            relevant=self.relevant,
+            confidence=self.confidence,
+            reasoning=self.reasoning,
+            findings=[Finding(claim=f.claim, quote=f.quote) for f in self.findings],
+        )
+
+
 class PartialExtractionError(CorpusQAError):
     """Part of a file was not judged; the verdict covers only the rest.
 
-    Raised when sections failed outright or their output was truncated (only
+    Raised when sections failed outright, or their output was truncated or
+    malformed (only
     the complete leading findings kept). Carries the merged result of what
     survived so callers can still show those findings. The file must be
     reported as failed and the result never cached: the passage that mattered
@@ -91,6 +119,8 @@ class PartialExtractionError(CorpusQAError):
         result: Merged extraction over what survived.
         skipped: Number of sections that failed.
         truncated: Number of sections whose output was truncated.
+        malformed: Number of sections whose output stayed invalid JSON through
+            the repair turn.
         total: Number of sections in the file.
     """
 
@@ -101,6 +131,7 @@ class PartialExtractionError(CorpusQAError):
         skipped: int = 0,
         last_error: str | None = None,
         truncated: int = 0,
+        malformed: int = 0,
     ) -> None:
         """Initializes the error with the partial result and loss counts."""
         problems = []
@@ -114,10 +145,16 @@ class PartialExtractionError(CorpusQAError):
                 f"{truncated} of {total} sections had truncated output "
                 "(raise the extract task's max_tokens)"
             )
+        if malformed:
+            problems.append(
+                f"{malformed} of {total} sections had malformed output the "
+                "repair turn could not fix (only their complete findings kept)"
+            )
         super().__init__("; ".join(problems) + "; the verdict covers only the rest")
         self.result = result
         self.skipped = skipped
         self.truncated = truncated
+        self.malformed = malformed
         self.total = total
 
 
@@ -136,7 +173,7 @@ def extraction_fingerprint() -> str:
         extract_prompt.TEMPLATE,
         json.dumps(extract_prompt.RELEVANCE_INSTRUCTIONS, sort_keys=True),
         common_prompt.DEFINITION_BLOCK,
-        schema_instruction(ExtractionResult),
+        schema_instruction(_ModelVerdict),
         f"splitter-v{splitting.SPLITTER_VERSION}",
     ]
     return hashlib.sha256("\x00".join(parts).encode()).hexdigest()[:16]
@@ -461,18 +498,20 @@ async def extract_file(
     section_failures = 0
     last_error: CorpusQAError | None = None
     truncation: list[None] = []  # one entry per section with truncated output
+    malformed: list[None] = []  # ...and per section with malformed output
     for section in sections:
         messages = _section_messages(
             question, definition_block, rel_path, file_hash, section, relevance
         )
         try:
-            result = await complete_structured(
+            verdict = await complete_structured(
                 client,
                 TaskName.EXTRACT,
                 messages,
-                ExtractionResult,
+                _ModelVerdict,
                 on_truncated=lambda: truncation.append(None),
                 on_completion=on_completion,
+                on_malformed=lambda: malformed.append(None),
             )
         except CorpusQAError as exc:
             # One section's structured-output failure (e.g. a truncated JSON
@@ -488,6 +527,7 @@ async def extract_file(
             if on_section is not None:
                 on_section()
             continue
+        result = verdict.to_result(file_hash)
         _snap_findings(result, markdown, norm_source, source_map, page_map)
         section_results.append(result)
         if on_section is not None:
@@ -501,13 +541,14 @@ async def extract_file(
             file_hash=file_hash, relevant=False, confidence=0.0, reasoning=""
         )
     merged = _merge_sections(file_hash, section_results)
-    if section_failures or truncation:
+    if section_failures or truncation or malformed:
         raise PartialExtractionError(
             merged,
             total=len(sections),
             skipped=section_failures,
             last_error=str(last_error) if last_error is not None else None,
             truncated=len(truncation),
+            malformed=len(malformed),
         )
     return merged
 

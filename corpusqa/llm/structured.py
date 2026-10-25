@@ -82,8 +82,10 @@ def _salvage_truncated(raw: str) -> str | None:
     A length-capped extraction completion almost always cuts off partway
     through the findings array; the object header (scalar fields plus
     ``"findings": [``) is intact and some finding objects fully serialized.
-    Keep the complete ones and close the structure. Returns None when the shape
-    does not match (nothing to salvage).
+    Keep the complete ones and close the structure. A brace-balanced object
+    that is not valid JSON (a field mangled mid-object) is not complete and
+    is dropped. Returns None when the shape does not match (nothing to
+    salvage).
     """
     key = raw.find('"findings"')
     if key < 0:
@@ -91,17 +93,27 @@ def _salvage_truncated(raw: str) -> str | None:
     open_bracket = raw.find("[", key)
     if open_bracket < 0:
         return None
-    objects = _complete_array_objects(raw[open_bracket + 1 :])
+    objects = [
+        obj for obj in _complete_array_objects(raw[open_bracket + 1 :]) if _is_json(obj)
+    ]
     return raw[: open_bracket + 1] + ",".join(objects) + "]}"
 
 
+def _is_json(text: str) -> bool:
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    return True
+
+
 def _try_validate(
-    raw: str, output_model: type[T], on_salvaged: Callable[[], None]
+    raw: str, output_model: type[T], on_salvaged: Callable[[], None] | None
 ) -> T | ValidationError:
-    """Validates ``raw``; on failure tries a truncation salvage.
+    """Validates ``raw``; on failure tries a salvage when ``on_salvaged`` is set.
 
     ``on_salvaged`` is called when only the salvage validates, i.e. trailing
-    content was dropped.
+    content was dropped. Pass None to validate without salvaging.
 
     Returns:
         The validated model, or the validation error of ``raw`` itself when
@@ -110,6 +122,8 @@ def _try_validate(
     try:
         return output_model.model_validate_json(raw)
     except ValidationError as error:
+        if on_salvaged is None:
+            return error
         salvaged = _salvage_truncated(raw)
         if salvaged is None:
             return error
@@ -128,6 +142,7 @@ async def complete_structured(
     output_model: type[T],
     on_truncated: Callable[[], None] | None = None,
     on_completion: Callable[[Completion], None] | None = None,
+    on_malformed: Callable[[], None] | None = None,
 ) -> T:
     """Runs a completion and validates the output against a Pydantic model.
 
@@ -141,11 +156,15 @@ async def complete_structured(
         messages: Chat messages; the first system message (or a prepended
             one) receives the schema instruction.
         output_model: Pydantic model the output must validate against.
-        on_truncated: Called when the output was cut off and only its complete
-            leading part was kept (a warning is logged either way), so the
-            caller can treat the result as incomplete.
+        on_truncated: Called when the output was cut off at the length limit
+            and only its complete leading part was kept (a warning is logged
+            either way), so the caller can treat the result as incomplete.
         on_completion: Called with every completion made (including the repair
             attempt), e.g. to learn which model served the result.
+        on_malformed: Called when the output stopped normally but stayed
+            invalid through the repair turn, and only its complete leading
+            part was kept; the result is incomplete for a different reason
+            than truncation, and more ``max_tokens`` would not help.
 
     Returns:
         The validated model instance.
@@ -185,7 +204,7 @@ async def complete_structured(
             raw_output=completion.text,
         )
 
-    def salvaged() -> None:
+    def truncated_kept() -> None:
         _log.warning(
             "task=%s output was truncated; kept only its complete findings",
             task.value,
@@ -193,7 +212,15 @@ async def complete_structured(
         if on_truncated is not None:
             on_truncated()
 
-    validated = _try_validate(raw, output_model, salvaged)
+    # Salvage is for output cut off at the length limit: its complete leading
+    # part is all there is, and a repair turn would hit the same limit. Output
+    # that stopped normally but is invalid is a JSON defect (e.g. a mangled
+    # field mid-object); the repair turn can recover every finding, where a
+    # salvage would silently drop the ones after the defect.
+    first_truncated = completion.finish_reason == "length"
+    validated = _try_validate(
+        raw, output_model, truncated_kept if first_truncated else None
+    )
     if not isinstance(validated, ValidationError):
         return validated
     first_error = validated
@@ -202,10 +229,9 @@ async def complete_structured(
         "task=%s structured output failed validation; one repair attempt",
         task.value,
     )
-    truncated = completion.finish_reason == "length"
     guidance = (
         structured_prompt.TRUNCATED_REPAIR
-        if truncated
+        if first_truncated
         else structured_prompt.INVALID_REPAIR.format(errors=first_error)
     )
     repair_messages = messages + [
@@ -226,14 +252,34 @@ async def complete_structured(
             "is too large for the model's context window.",
             raw_output=repaired.text,
         )
-    validated2 = _try_validate(raw2, output_model, salvaged)
+    repaired_truncated = repaired.finish_reason == "length"
+    validated2 = _try_validate(
+        raw2, output_model, truncated_kept if repaired_truncated else None
+    )
     if not isinstance(validated2, ValidationError):
         return validated2
     second_error = validated2
+
+    if not (first_truncated or repaired_truncated):
+        # Invalid twice without a length stop: keep the complete findings of
+        # either attempt as a last resort, reported as malformed.
+        def malformed_kept() -> None:
+            _log.warning(
+                "task=%s output was malformed JSON through the repair turn; "
+                "kept only its complete findings",
+                task.value,
+            )
+            if on_malformed is not None:
+                on_malformed()
+
+        for attempt in (raw2, raw):
+            kept = _try_validate(attempt, output_model, malformed_kept)
+            if not isinstance(kept, ValidationError):
+                return kept
     hint = (
         " The output was truncated at the length limit; raise this "
         "task's max_tokens or reduce findings per call."
-        if repaired.finish_reason == "length" or completion.finish_reason == "length"
+        if first_truncated or repaired_truncated
         else ""
     )
     raise StructuredOutputError(

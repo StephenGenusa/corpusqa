@@ -13,9 +13,8 @@ SYSTEM = (
     "Keep each quote to the shortest span that supports the claim (one "
     "sentence or less is ideal). The `claim` is your own words; the `quote` is "
     "the file's words.\n"
-    "Leave `heading_path` empty and `page_no` null: the system fills both from "
-    "where your quote is found in the file, so spending tokens on them only "
-    "risks truncating your output.\n"
+    "Write only the fields in the schema: the system finds where each quote "
+    "sits in the file and adds its heading and page itself.\n"
     "Example -- document says: The animal nature is a physical principle of "
     'corruption. GOOD quote: "a physical principle of corruption". BAD quote '
     '(paraphrase): "the body is a corrupting force".\n'
