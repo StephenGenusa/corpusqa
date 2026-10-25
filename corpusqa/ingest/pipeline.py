@@ -138,6 +138,10 @@ def run_index(
             else:  # NEW, MODIFIED, or forced
                 if item.drift is DriftKind.MODIFIED:
                     _delete(store, cache_dir, known[item.rel_path])
+                elif item.drift is DriftKind.UNCHANGED:
+                    # Forced: the new conversion may differ under the same
+                    # hash, so nothing derived from the old one may survive.
+                    _delete(store, cache_dir, item.file_hash)
                 _convert_one(
                     store,
                     cache_dir,

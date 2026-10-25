@@ -30,6 +30,16 @@ _SOFFICE_TIMEOUT_S = 120
 # when rebuilding the page map; long enough to be unique, short enough to
 # survive minor export reflow.
 _PAGE_ANCHOR_CHARS = 40
+# A table is placed by its first cell at least this long: shorter cells
+# ("AM", "4") match too much of the text ahead to locate the table.
+_MIN_TABLE_ANCHOR_CHARS = 8
+# Running-header demotion: fewer recognized page headers than this teaches
+# nothing about where a document's headers sit.
+_MIN_PAGE_HEADERS = 3
+# Slack around the learned header band (fraction of page height) and text
+# size (points), so a header a hair lower or larger than the rest still counts.
+_HEADER_BAND_SLACK = 0.01
+_HEADER_SIZE_SLACK_PT = 0.5
 _log = logging.getLogger("corpusqa.ingest")
 
 STATUS_OK = "ok"
@@ -199,13 +209,77 @@ def _doc_via_soffice(source: Path, scratch: Path) -> Path:
     return produced
 
 
+def demote_running_headers(document: DoclingDocument) -> int:
+    """Moves running page headers that Docling labelled as headings out of the body.
+
+    Docling recognizes most running headers (``page_header``, which the
+    markdown export leaves out) but labels some as section headings. Those
+    export as ``##`` lines that land mid-sentence, give quotes the wrong
+    section label and break quotes across page breaks. Such a heading sits
+    where this document's own page headers sit, at a page-header text size,
+    so both are learned from the recognized headers: a heading whose box ends
+    within their band and whose height is within their range is moved to the
+    furniture layer, as Docling does with page headers. Real headings in the
+    band are set larger and stay.
+
+    Returns:
+        How many headings were demoted (0 when the document has too few
+        recognized page headers to learn from).
+    """
+    from docling_core.types.doc.document import ContentLayer
+    from docling_core.types.doc.labels import DocItemLabel
+
+    def geometry(item: Any) -> tuple[float, float] | None:  # noqa: ANN401 -- docling item
+        """Returns (box bottom as a fraction of page height, box height)."""
+        if not item.prov:
+            return None
+        prov = item.prov[0]
+        page = document.pages.get(prov.page_no)
+        if page is None or not page.size.height:
+            return None
+        box = prov.bbox.to_top_left_origin(page.size.height)
+        return box.b / page.size.height, box.height
+
+    headers = [
+        g
+        for t in document.texts
+        if t.label == DocItemLabel.PAGE_HEADER and (g := geometry(t)) is not None
+    ]
+    if len(headers) < _MIN_PAGE_HEADERS:
+        return 0
+    band = max(bottom for bottom, _ in headers) + _HEADER_BAND_SLACK
+    low = min(h for _, h in headers) - _HEADER_SIZE_SLACK_PT
+    high = max(h for _, h in headers) + _HEADER_SIZE_SLACK_PT
+    demoted = 0
+    for item in document.texts:
+        if item.label != DocItemLabel.SECTION_HEADER:
+            continue
+        g = geometry(item)
+        if g is not None and g[0] <= band and low <= g[1] <= high:
+            item.content_layer = ContentLayer.FURNITURE
+            demoted += 1
+    return demoted
+
+
+def _table_anchor(item: Any) -> str | None:  # noqa: ANN401 -- docling item
+    """Returns a table's first cell text long enough to locate, if any."""
+    cells = getattr(getattr(item, "data", None), "table_cells", None) or []
+    for cell in cells:
+        text = (getattr(cell, "text", "") or "").strip()
+        if len(text) >= _MIN_TABLE_ANCHOR_CHARS:
+            return text
+    return None
+
+
 def _build_page_map(document: DoclingDocument, markdown: str) -> list[tuple[int, int]]:
     """Builds sorted ``(markdown_offset, page_no)`` marks from docling provenance.
 
     ``export_to_markdown`` discards the per-item page numbers docling records,
     so we recover them: walk items in document order, locate each item's text in
     the exported markdown at or after the previous match, and emit a mark each
-    time the page changes. Pages run in order, so one locatable item per page is
+    time the page changes. A table, which has no text of its own, is located by
+    its first cell long enough to place, so a page holding only a table still
+    gets its mark. Pages run in order, so one locatable item per page is
     enough -- items not found ahead of the cursor (reflowed text, or a repeated
     running header whose only match lies behind) are skipped, which keeps the
     marks in page order. Empty for sources with no page provenance (md/txt) or
@@ -221,7 +295,7 @@ def _build_page_map(document: DoclingDocument, markdown: str) -> list[tuple[int,
         return marks
     for entry in items:
         item = entry[0] if isinstance(entry, tuple) else entry
-        text = getattr(item, "text", None)
+        text = getattr(item, "text", None) or _table_anchor(item)
         prov = getattr(item, "prov", None)
         if not text or not prov:
             continue
@@ -281,6 +355,7 @@ def convert(
             active = document_converter or build_converter(ocr, pdf_backend)
             result = active.convert(str(target), raises_on_error=False)
             document: DoclingDocument = result.document
+            demoted = demote_running_headers(document)
             markdown = document.export_to_markdown()
             page_count = len(document.pages) if document.pages else None
             docling_status = str(result.status.value)
@@ -304,6 +379,10 @@ def convert(
     parse_status, parse_error = interpret_status(
         docling_status, error_strings, len(markdown.strip()), page_count
     )
+    if demoted:
+        _log.info(
+            "%s: %d running page headers demoted from headings", source.name, demoted
+        )
     md_path = cache_dir / f"{file_hash}.md"
     md_path.write_text(markdown, encoding="utf-8")
     page_map = _build_page_map(document, markdown)
@@ -318,6 +397,7 @@ def convert(
         "extracted_chars": len(markdown.strip()),
         "docling_status": docling_status,
         "errors": error_strings,
+        "running_headers_demoted": demoted,
     }
     (cache_dir / f"{file_hash}.meta.json").write_text(
         json.dumps(meta, indent=2), encoding="utf-8"

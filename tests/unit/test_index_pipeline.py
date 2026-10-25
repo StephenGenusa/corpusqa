@@ -137,3 +137,26 @@ def test_cli_bare_force_means_every_file(
     with pytest.raises(SystemExit):
         cli.main(["index", str(tmp_path), "--config", str(EXAMPLE), "--force"])
     assert seen == [{"force": [], "force_all": True}]
+
+
+def test_forced_reparse_drops_stale_verdicts_and_artifacts(
+    tmp_path: Path, mock_converter: list[dict[str, object]]
+) -> None:
+    # A forced re-parse can change the markdown (a converter fix) while the
+    # file hash stays the same, so verdicts and cards made from the old text
+    # must not survive it.
+    config = load_config(EXAMPLE)
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "a.md").write_text("# A\nalpha", encoding="utf-8")
+    run_index(root, config)
+    _, db_path, cache_dir = index_paths(root)
+    with CatalogStore(db_path) as store:
+        file_hash = store.known_files()["a.md"]
+        store.put_evaluation("run1", "qh", file_hash, "m", "{}")
+    (cache_dir / f"{file_hash}.chunks.jsonl").write_text("{}", encoding="utf-8")
+
+    run_index(root, config, force_all=True)
+    with CatalogStore(db_path) as store:
+        assert store.get_evaluation("qh", file_hash, "m") is None
+    assert not (cache_dir / f"{file_hash}.chunks.jsonl").exists()

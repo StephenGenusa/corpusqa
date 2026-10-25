@@ -246,3 +246,40 @@ def test_corrupt_page_map_file_is_logged(
     with caplog.at_level("WARNING", logger="corpusqa.query"):
         assert _load_page_map(tmp_path, "h") == []
     assert any("h.pages.json" in r.getMessage() for r in caplog.records)
+
+
+def _table_item(cells: list[str], page: int) -> tuple[types.SimpleNamespace, int]:
+    data = types.SimpleNamespace(
+        table_cells=[types.SimpleNamespace(text=c) for c in cells]
+    )
+    return (
+        types.SimpleNamespace(data=data, prov=[types.SimpleNamespace(page_no=page)]),
+        0,
+    )
+
+
+def test_page_map_anchors_a_table_only_page_on_its_cells() -> None:
+    # A page holding only a table (a chronology chart) has no text item; its
+    # quotes must not inherit the previous page's number.
+    md = "Intro paragraph on page one.\n\n| AM | Events Years |\n|----|----|\n"
+    doc = types.SimpleNamespace(
+        iterate_items=lambda: [
+            _page_item("Intro paragraph on page one.", 1),
+            _table_item(["AM", "Events Years"], 2),
+        ]
+    )
+    marks = _build_page_map(doc, md)  # type: ignore[arg-type]
+    assert marks == [(0, 1), (md.index("Events Years"), 2)]
+
+
+def test_page_map_ignores_table_cells_too_short_to_place() -> None:
+    # "AM" alone would match the next "AM" anywhere ahead, stamping the page
+    # number onto text before the table.
+    md = "Intro paragraph on page one, AMple text.\n\n| AM | 4 |\n"
+    doc = types.SimpleNamespace(
+        iterate_items=lambda: [
+            _page_item("Intro paragraph on page one, AMple text.", 1),
+            _table_item(["AM", "4"], 2),
+        ]
+    )
+    assert [p for _, p in _build_page_map(doc, md)] == [1]  # type: ignore[arg-type]
