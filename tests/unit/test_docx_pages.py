@@ -91,7 +91,7 @@ def test_unplaceable_bookmark_is_skipped(tmp_path: Path) -> None:
         ],
     )
     pm = build_docx_page_map(src, "intro\n\ntail of the document text")
-    assert [label for _, label in pm] == ["1", "3"]
+    assert [label for _, label in pm] == ["1\u20132", "3"]
 
 
 def test_docx_without_bookmarks_has_no_page_map(tmp_path: Path) -> None:
@@ -138,5 +138,47 @@ def test_far_ahead_boilerplate_match_does_not_derail_later_marks(
         f"{filler}\n\n{boiler}"
     )
     pm = build_docx_page_map(src, md)
-    assert [label for _, label in pm] == ["1", "3", "4"]
+    assert [label for _, label in pm] == ["1\u20132", "3", "4"]
     assert md[pm[1][0] :].startswith("third page")
+
+
+LONG = "text of page {} runs on for a good while here"
+
+
+def _gap_doc(tmp_path: Path, pages: list[int]) -> Path:
+    items = ["intro words that open the volume"]
+    for n in pages:
+        items += [f"BM:vp_10_{n}", LONG.format(n)]
+    return make_docx(tmp_path, items)
+
+
+def test_single_gap_becomes_range_label(tmp_path: Path) -> None:
+    src = _gap_doc(tmp_path, [22, 23, 24])
+    md = (
+        "intro words that open the volume\n\n"
+        + LONG.format(22)
+        + "\n\n"
+        + LONG.format(24)
+    )
+    pm = build_docx_page_map(src, md)
+    assert [label for _, label in pm] == ["1", "22\u201323", "24"]
+    assert md[pm[1][0] :].startswith("text of page 22")
+
+
+def test_multi_page_gap_range(tmp_path: Path) -> None:
+    src = _gap_doc(tmp_path, [22, 23, 24, 25])
+    md = (
+        "intro words that open the volume\n\n"
+        + LONG.format(22)
+        + "\n\n"
+        + LONG.format(25)
+    )
+    pm = build_docx_page_map(src, md)
+    assert [label for _, label in pm] == ["1", "22\u201324", "25"]
+
+
+def test_trailing_gap_extends_final_label(tmp_path: Path) -> None:
+    src = _gap_doc(tmp_path, [22, 23, 24])
+    md = "intro words that open the volume\n\n" + LONG.format(22)
+    pm = build_docx_page_map(src, md)
+    assert [label for _, label in pm] == ["1", "22\u201324"]

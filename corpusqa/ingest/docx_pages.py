@@ -88,13 +88,18 @@ def build_docx_page_map(source: Path, markdown: str) -> PageMap:
 
     Returns:
         Sorted ``(markdown_offset, page_label)`` marks; empty when the document
-        has no ``vp_`` bookmarks.
+        has no ``vp_`` bookmarks. A span whose following bookmarks could not be
+        placed is labelled as a range ("22\u201323"): its text may lie on any
+        of those pages, and a label must never claim a page it may not be on.
     """
     marks = docx_page_marks(source)
     if not marks:
         return []
     normalized, index_map = _compact(markdown)
-    page_map: PageMap = [(0, "1")]
+    # [offset, first_label, last_label]: last_label moves past the first when
+    # the marks right after this one could not be placed, so the span reads as
+    # a range instead of silently inheriting this page's label alone.
+    spans: list[list[int | str]] = [[0, "1", "1"]]
     cursor = 0  # position in normalized space
     unplaced: list[str] = []
     max_jump = 0
@@ -102,13 +107,13 @@ def build_docx_page_map(source: Path, markdown: str) -> PageMap:
         pos = _locate(text, normalized, cursor)
         if pos < 0:
             unplaced.append(label)
+            spans[-1][2] = label
             continue
         max_jump = max(max_jump, pos - cursor)
         cursor = pos
         offset = index_map[pos]
-        if offset < page_map[-1][0]:
-            offset = page_map[-1][0]
-        page_map.append((offset, label))
+        offset = max(offset, int(spans[-1][0]))
+        spans.append([offset, label, label])
     if unplaced:
         _log.warning(
             "%s: %d of %d page bookmarks could not be placed in the markdown "
@@ -120,7 +125,10 @@ def build_docx_page_map(source: Path, markdown: str) -> PageMap:
             ", ".join(unplaced[:40]) + (" ..." if len(unplaced) > 40 else ""),
         )
     _log.debug("%s: largest page-anchor cursor jump %d chars", source.name, max_jump)
-    return page_map
+    return [
+        (int(off), first if first == last else f"{first}\u2013{last}")
+        for off, first, last in ((o, str(f), str(la)) for o, f, la in spans)
+    ]
 
 
 def _compact(text: str) -> tuple[str, list[int]]:
