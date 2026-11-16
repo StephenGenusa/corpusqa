@@ -234,3 +234,102 @@ def test_explain_lists_persisted_verdicts(
     assert code == 0
     assert "RELEVANT" in captured.out
     assert "test question" in captured.out
+
+
+def _hashes(corpus: Path) -> dict[str, str]:
+    return CatalogStore(corpus / ".corpusqa" / "catalog.db").known_files()
+
+
+def test_on_file_result_fires_per_file(corpus: Path) -> None:
+    config = load_config(EXAMPLE)
+    hashes = list(_hashes(corpus).values())
+    fake = FakeClient(
+        {
+            TaskName.EXTRACT: [_extraction(h, True) for h in hashes],
+            TaskName.SYNTHESIZE: [],
+        }
+    )
+    seen: list[str] = []
+    asyncio.run(
+        qp.run_query(
+            corpus,
+            "stream-q",
+            config,
+            mode="sweep",
+            client=fake,
+            on_file_result=lambda rel, _r: seen.append(rel),
+            confirm=lambda _e: True,
+        )
+    )
+    assert sorted(seen) == ["a.md", "b.md"]
+
+    # a second run answers from cache and still streams every file
+    seen2: list[str] = []
+    asyncio.run(
+        qp.run_query(
+            corpus,
+            "stream-q",
+            config,
+            mode="sweep",
+            client=FakeClient({}),
+            on_file_result=lambda rel, _r: seen2.append(rel),
+            confirm=lambda _e: True,
+        )
+    )
+    assert sorted(seen2) == ["a.md", "b.md"]
+
+
+def test_cached_verdict_is_resnapped_with_offsets(corpus: Path) -> None:
+    config = load_config(EXAMPLE)
+    hashes = _hashes(corpus)
+    fake = FakeClient(
+        {
+            TaskName.EXTRACT: [_extraction(h, True) for h in hashes.values()],
+            TaskName.SYNTHESIZE: [],
+        }
+    )
+    asyncio.run(
+        qp.run_query(
+            corpus, "snap-q", config, mode="sweep", client=fake, confirm=lambda _e: True
+        )
+    )
+    # Overwrite the cached verdict with a legacy one: page_no, no offsets.
+    h = hashes["a.md"]
+    legacy = json.dumps(
+        {
+            "file_hash": h,
+            "relevant": True,
+            "confidence": 0.8,
+            "findings": [
+                {
+                    "claim": "c",
+                    "quote": "Gardens grow",
+                    "heading_path": [],
+                    "page_no": 3,
+                }
+            ],
+        }
+    )
+    con = sqlite3.connect(corpus / ".corpusqa" / "catalog.db")
+    with con:
+        con.execute(
+            "UPDATE evaluations SET result_json = ? WHERE file_hash = ?", (legacy, h)
+        )
+    con.close()
+
+    got: dict[str, qp.ExtractionResult] = {}
+    asyncio.run(
+        qp.run_query(
+            corpus,
+            "snap-q",
+            config,
+            mode="sweep",
+            client=FakeClient({}),
+            on_file_result=lambda rel, r: got.__setitem__(rel, r),
+            confirm=lambda _e: True,
+        )
+    )
+    finding = got["a.md"].findings[0]
+    md = (corpus / ".corpusqa" / "md" / f"{h}.md").read_text("utf-8")
+    assert finding.start is not None and finding.end is not None
+    assert md[finding.start : finding.end] == "Gardens grow"

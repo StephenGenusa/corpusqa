@@ -32,6 +32,7 @@ from corpusqa.query.extractor import (
     extraction_fingerprint,
     plan_sections,
     section_token_budget,
+    snap_findings,
 )
 from corpusqa.query.router import Candidate, route
 from corpusqa.query.synthesizer import CitedAnswer, synthesize
@@ -185,6 +186,7 @@ async def run_query(
     use_cache: bool = True,
     synthesize_answer: bool = False,
     on_progress: Callable[[int, int], None] | None = None,
+    on_file_result: Callable[[str, ExtractionResult], None] | None = None,
     confirm: Callable[[CostEstimate], bool] | None = None,
     client: LLMTaskClient | None = None,
 ) -> QueryReport:
@@ -210,6 +212,8 @@ async def run_query(
             cited prose answer (``report.answer``). Default False: the report
             carries the raw findings and the CLI displays the hits directly --
             no extra LLM call, nothing paraphrased.
+        on_file_result: Called with ``(rel_path, result)`` once per file as
+            soon as its result exists (cached, fresh or partial).
         on_progress: Called with (calls_done, calls_total) as each extraction
             LLM call (one per section) completes. The total counts only
             non-cached files' sections -- actual LLM work -- so the bar and ETA
@@ -285,6 +289,7 @@ async def run_query(
             run_id=run_id,
             question_hash=question_hash,
             on_progress=on_progress,
+            on_file_result=on_file_result,
         )
         results = await runner.run(candidates)
         store.prune_evaluations(config.query.eval_retention_runs)
@@ -377,7 +382,7 @@ class _Pass2Plan:
             per file still to extract, for the estimate.
         cached_eval: Cached verdict JSON by file hash (None when not cached).
         sections: Planned sections for each file that needs LLM work.
-        page_maps: Page marks for each file that needs LLM work.
+        page_maps: Page marks for every candidate file.
         total_calls: Extraction calls to make (for the progress total).
     """
 
@@ -413,12 +418,12 @@ def _plan_pass2(
             store.get_evaluation(question_hash, h, extract_model) if use_cache else None
         )
         plan.cached_eval[h] = cached_json
+        plan.page_maps[h] = _load_page_map(cache_dir, h)
         if cached_json is None:
             sections = plan_sections(md, client, config)
             plan.sections[h] = sections
             plan.section_tokens.append(_token_counts(sections, client))
             plan.total_calls += len(sections)
-            plan.page_maps[h] = _load_page_map(cache_dir, h)
     return plan
 
 
@@ -441,6 +446,7 @@ class _Pass2Runner:
     run_id: str
     question_hash: str
     on_progress: Callable[[int, int], None] | None
+    on_file_result: Callable[[str, ExtractionResult], None] | None = None
     failures: list[tuple[str, str]] = field(default_factory=list)
     cached: int = 0
     _calls_done: int = 0
@@ -470,6 +476,9 @@ class _Pass2Runner:
             cached_json = self.plan.cached_eval[h]
             if cached_json is not None:
                 result = ExtractionResult.model_validate_json(cached_json)
+                snap_findings(
+                    result, self.plan.markdowns[h], self.plan.page_maps.get(h)
+                )
                 self.cached += 1
             else:
                 result = await self._extract(cand)
@@ -489,6 +498,8 @@ class _Pass2Runner:
             if remaining > 0:
                 self._calls_done += remaining
                 self._report_progress()
+        if self.on_file_result is not None:
+            self.on_file_result(cand.file.rel_path, result)
         return (cand.file.rel_path, result)
 
     async def _extract(self, cand: Candidate) -> ExtractionResult:
