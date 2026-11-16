@@ -231,6 +231,9 @@ _MAX_TRIM_WORDS = 3
 _SNAP_SEPARATOR = " … "
 
 
+_MD_ESCAPABLE = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+
+
 def _normalize_for_match(text: str) -> tuple[str, list[int]]:
     """Folds PDF/markdown surface noise for quote matching.
 
@@ -260,6 +263,10 @@ def _normalize_for_match(text: str) -> tuple[str, list[int]]:
             if j < n and text[j].isalpha():
                 i = j
                 continue
+        # Markdown escape ("snake\_case"): the backslash is not source text.
+        if ch == "\\" and i + 1 < n and text[i + 1] in _MD_ESCAPABLE:
+            i += 1
+            continue
         if ch == "\u00ad":  # soft hyphen
             i += 1
             continue

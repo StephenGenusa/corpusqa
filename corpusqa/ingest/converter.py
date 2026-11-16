@@ -19,12 +19,17 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from corpusqa.errors import IngestError
+from corpusqa.ingest.docx_pages import build_docx_page_map
 
 if TYPE_CHECKING:  # docling is heavy; imported lazily at call time
     from docling.document_converter import DocumentConverter
     from docling_core.types.doc.document import DoclingDocument
 
 ZERO_TEXT_THRESHOLD = 200
+# Bumped when conversion output changes in a way old caches lack (v2: docx
+# page maps from vp_ bookmarks). An unchanged file whose cached meta records an
+# older version is reconverted by the index pipeline.
+CONVERTER_VERSION: int = 2
 _SOFFICE_TIMEOUT_S = 120
 # Leading chars of an item's text used to locate it in the exported markdown
 # when rebuilding the page map; long enough to be unique, short enough to
@@ -385,7 +390,10 @@ def convert(
         )
     md_path = cache_dir / f"{file_hash}.md"
     md_path.write_text(markdown, encoding="utf-8")
-    page_map = _build_page_map(document, markdown)
+    if suffix == ".docx":
+        page_map = build_docx_page_map(source, markdown)
+    else:
+        page_map = _build_page_map(document, markdown)
     if page_map:
         (cache_dir / f"{file_hash}.pages.json").write_text(
             json.dumps(page_map), encoding="utf-8"
@@ -398,6 +406,7 @@ def convert(
         "docling_status": docling_status,
         "errors": error_strings,
         "running_headers_demoted": demoted,
+        "converter_version": CONVERTER_VERSION,
     }
     (cache_dir / f"{file_hash}.meta.json").write_text(
         json.dumps(meta, indent=2), encoding="utf-8"

@@ -7,6 +7,7 @@ actually reaches the converter.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,10 @@ def mock_converter(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, object]]:
         cache_dir.mkdir(parents=True, exist_ok=True)
         md_path = cache_dir / f"{file_hash}.md"
         md_path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        (cache_dir / f"{file_hash}.meta.json").write_text(
+            json.dumps({"converter_version": converter.CONVERTER_VERSION}),
+            encoding="utf-8",
+        )
         return converter.ConversionResult(
             file_hash=file_hash,
             md_cache_path=md_path,
@@ -160,3 +165,42 @@ def test_forced_reparse_drops_stale_verdicts_and_artifacts(
     with CatalogStore(db_path) as store:
         assert store.get_evaluation("qh", file_hash, "m") is None
     assert not (cache_dir / f"{file_hash}.chunks.jsonl").exists()
+
+
+def test_stale_converter_version_reconverts(
+    tmp_path: Path, mock_converter: list[dict[str, object]]
+) -> None:
+    config = load_config(EXAMPLE)
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "a.md").write_text("# A\nalpha", encoding="utf-8")
+    run_index(root, config)
+    assert run_index(root, config).unchanged == 1
+
+    cache = index_paths(root)[2]
+    (meta,) = cache.glob("*.meta.json")
+    meta.write_text(json.dumps({"converter_version": 1}), encoding="utf-8")
+    report = run_index(root, config)
+    assert report.parsed == 1 and report.unchanged == 0
+
+    meta.write_text(json.dumps({}), encoding="utf-8")  # missing version: stale
+    assert run_index(root, config).parsed == 1
+
+
+def test_should_stop_ends_between_files(
+    tmp_path: Path, mock_converter: list[dict[str, object]]
+) -> None:
+    config = load_config(EXAMPLE)
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "a.md").write_text("# A\nalpha", encoding="utf-8")
+    (root / "b.md").write_text("# B\nbeta", encoding="utf-8")
+    calls: list[tuple[int, int]] = []
+    report = run_index(
+        root,
+        config,
+        on_progress=lambda d, t: calls.append((d, t)),
+        should_stop=lambda: len(calls) >= 1,
+    )
+    assert report.stopped and report.parsed == 1
+    assert calls == [(1, 2)]

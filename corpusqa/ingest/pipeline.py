@@ -8,7 +8,9 @@ only renders its report. Per-file results are persisted as they complete
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,6 +45,8 @@ class IndexReport:
         duplicates: On-disk copies of content owned by another path
             (identity is the content hash; copies are not indexed twice).
         flagged: ``(rel_path, parse_status)`` for non-ok conversions.
+        stopped: True when ``should_stop`` ended the run before all files
+            were handled.
     """
 
     parsed: int = 0
@@ -51,6 +55,7 @@ class IndexReport:
     unchanged: int = 0
     duplicates: int = 0
     flagged: list[tuple[str, str]] = field(default_factory=list)
+    stopped: bool = False
 
 
 def index_paths(corpus_root: Path) -> tuple[Path, Path, Path]:
@@ -72,6 +77,8 @@ def run_index(
     config: AppConfig,
     force: list[Path] | None = None,
     force_all: bool = False,
+    on_progress: Callable[[int, int], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> IndexReport:
     """Runs the incremental index pipeline over a corpus directory.
 
@@ -80,6 +87,10 @@ def run_index(
         config: Validated application configuration.
         force: Source paths to reconvert even if unchanged.
         force_all: Reconvert every file even if unchanged.
+        on_progress: Called as ``(done, total)`` after each file that needed
+            conversion; ``total`` counts the files needing conversion.
+        should_stop: Checked between files; a true result ends the run early
+            (``IndexReport.stopped``).
 
     Returns:
         A per-run report.
@@ -118,7 +129,23 @@ def run_index(
                 )
             return converter_cache[0]
 
+        def needs_conversion(item: DiscoveredFile) -> bool:
+            if item.drift in (DriftKind.NEW, DriftKind.MODIFIED):
+                return True
+            if item.drift is not DriftKind.UNCHANGED:
+                return False
+            return (
+                force_all
+                or item.rel_path in forced
+                or _cache_is_stale(cache_dir, item.file_hash)
+            )
+
+        total = sum(1 for i in found if needs_conversion(i))
+        done = 0
         for item in found:
+            if should_stop is not None and should_stop():
+                report.stopped = True
+                break
             if item.drift is DriftKind.DELETED:
                 _delete(store, cache_dir, item.file_hash)
                 report.deleted += 1
@@ -129,11 +156,7 @@ def run_index(
             elif item.drift is DriftKind.MOVED:
                 store.update_rel_path(item.file_hash, item.rel_path)
                 report.moved += 1
-            elif (
-                item.drift is DriftKind.UNCHANGED
-                and not force_all
-                and item.rel_path not in forced
-            ):
+            elif item.drift is DriftKind.UNCHANGED and not needs_conversion(item):
                 report.unchanged += 1
             else:  # NEW, MODIFIED, or forced
                 if item.drift is DriftKind.MODIFIED:
@@ -151,9 +174,26 @@ def run_index(
                     report,
                     get_converter(),
                 )
+                done += 1
+                if on_progress is not None:
+                    on_progress(done, total)
 
         store.write_meta(str(corpus_root))
     return report
+
+
+def _cache_is_stale(cache_dir: Path, file_hash: str) -> bool:
+    """True when a file's cached conversion predates ``CONVERTER_VERSION``.
+
+    A missing or unreadable meta file counts as stale; so does a meta without
+    ``converter_version``.
+    """
+    try:
+        meta = json.loads((cache_dir / f"{file_hash}.meta.json").read_text("utf-8"))
+        version = meta.get("converter_version")
+    except (OSError, ValueError, AttributeError):
+        return True
+    return not isinstance(version, int) or version < converter.CONVERTER_VERSION
 
 
 def _delete(store: CatalogStore, cache_dir: Path, file_hash: str) -> None:
