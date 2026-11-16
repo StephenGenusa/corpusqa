@@ -58,6 +58,41 @@ def test_only_changed_lines_differ(tmp_path: Path) -> None:
     assert changed == ["-    max_tokens: 2048", "+    max_tokens: 1024"]
 
 
+@pytest.mark.parametrize(
+    ("indent", "under"),
+    [
+        (4, 2),  # 4-space mappings, dash 2 columns in from its key
+        (2, 2),  # 2-space mappings, dash 2 columns in from its key
+        (2, 0),  # ruamel's own default: dash level with its key
+    ],
+)
+def test_sequence_indent_round_trips(tmp_path: Path, indent: int, under: int) -> None:
+    pad = " " * indent
+    item = pad + " " * under  # dash column relative to the task mapping
+    text = (
+        "providers:\n"
+        f"{pad}local:\n"
+        f'{pad}{pad}api_base: "http://localhost:11434"   # kept\n'
+        "tasks:\n"
+    )
+    for task in TaskName:
+        text += (
+            f"{pad}{task.value}:\n"
+            f'{pad}{pad}model: "ollama/qwen3:14b"\n'
+            f"{pad}{pad}provider: local\n"
+            f"{pad}{pad}max_tokens: {2048 if task is TaskName.EXTRACT else 512}\n"
+            f"{pad}{pad}context_window: 32768\n"
+            f"{pad}{pad}fallbacks:\n"
+            f'{pad}{item}- "a/b"\n'
+            f'{pad}{item}- "c/d"\n'
+        )
+    p = tmp_path / "corpusqa.yaml"
+    p.write_text(text, encoding="utf-8")
+    save_config_changes(p, [(("tasks", "extract", "max_tokens"), 1024)])
+    after = p.read_text(encoding="utf-8")
+    assert after == text.replace("max_tokens: 2048", "max_tokens: 1024")
+
+
 def test_none_deletes_key(tmp_path: Path) -> None:
     p = _write(tmp_path)
     save_config_changes(p, [(("tasks", "extract", "max_input_tokens"), None)])

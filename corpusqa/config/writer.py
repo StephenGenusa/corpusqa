@@ -12,6 +12,7 @@ from typing import Any
 from pydantic import ValidationError
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
+from ruamel.yaml.util import load_yaml_guess_indent
 
 from corpusqa.config.loader import format_validation_error
 from corpusqa.config.schema import AppConfig
@@ -27,6 +28,42 @@ def _plain(value: object) -> object:
     if isinstance(value, list):
         return [_plain(v) for v in value]
     return value
+
+
+def _mapping_indent(text: str) -> int | None:
+    """Returns the step between a mapping key and its nested keys, if any.
+
+    The first ``key:`` line opening a nested block mapping decides it.
+    """
+    lines = [
+        ln for ln in text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")
+    ]
+    for parent, child in zip(lines, lines[1:], strict=False):
+        head = parent.split(" #", 1)[0].rstrip()
+        if not head.endswith(":") or head.lstrip().startswith("- "):
+            continue
+        p_ind = len(parent) - len(parent.lstrip())
+        c_ind = len(child) - len(child.lstrip())
+        if c_ind > p_ind and not child.lstrip().startswith("-"):
+            return c_ind - p_ind
+    return None
+
+
+def _configure_indent(yaml: YAML, text: str) -> None:
+    """Makes the dumper reproduce the file's own indentation.
+
+    ruamel's defaults (mapping 2, sequence 2, dash offset 0) would otherwise
+    re-indent every block mapping and sequence that differs on save.
+    """
+    mapping = _mapping_indent(text) or 2
+    try:
+        _, seq_indent, dash_offset = load_yaml_guess_indent(text)
+    except YAMLError:
+        seq_indent, dash_offset = None, None
+    if seq_indent is None or dash_offset is None:
+        yaml.indent(mapping=mapping, sequence=mapping, offset=0)
+    else:
+        yaml.indent(mapping=mapping, sequence=seq_indent, offset=dash_offset)
 
 
 def _apply(data: dict[str, Any], change: ConfigChange) -> None:
@@ -67,9 +104,11 @@ def save_config_changes(path: Path, changes: list[ConfigChange]) -> AppConfig:
     yaml.preserve_quotes = True
     yaml.width = 4096
     try:
-        data = yaml.load(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        data = yaml.load(text)
     except (OSError, YAMLError) as exc:
         raise ConfigError(f"cannot read config file {path}: {exc}") from exc
+    _configure_indent(yaml, text)
     if not isinstance(data, dict):
         raise ConfigError(f"config root must be a mapping, got {type(data).__name__}")
     for change in changes:
