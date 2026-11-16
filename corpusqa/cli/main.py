@@ -8,6 +8,9 @@ to messages and exit codes (0 ok, 1 user/config error, 2 partial failure).
 from __future__ import annotations
 
 import argparse
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn
@@ -110,12 +113,54 @@ def _build_parser() -> argparse.ArgumentParser:
     p_est.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
     p_est.add_argument("--yes", action="store_true")
 
+    p_launch = sub.add_parser(
+        "gui", help="launch the desktop GUI from a source checkout (development)"
+    )
+    p_launch.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
+
     p_gui = sub.add_parser(
         "gui-backend", help="stdio JSON-lines backend for the desktop GUI"
     )
     p_gui.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
 
     return parser
+
+
+def _repo_root() -> Path:
+    """Returns the source checkout root (parent of the ``corpusqa`` package)."""
+    return Path(__file__).resolve().parents[2]
+
+
+def _cmd_gui(config_path: Path) -> int:
+    """Starts the Electron GUI from ``<repo>/gui``, installing npm deps if needed.
+
+    Args:
+        config_path: Config file the GUI and its backend should use.
+
+    Returns:
+        Exit code of ``npm start``, or 1 when Node.js or the gui folder is missing.
+    """
+    npm = shutil.which("npm")
+    if npm is None:
+        print(
+            "error: Install Node.js (https://nodejs.org) to use the GUI",
+            file=sys.stderr,
+        )
+        return EXIT_USER_ERROR
+    gui_dir = _repo_root() / "gui"
+    if not gui_dir.is_dir():
+        print(f"error: GUI sources not found at {gui_dir}", file=sys.stderr)
+        return EXIT_USER_ERROR
+    if not (gui_dir / "node_modules").is_dir():
+        installed = subprocess.run([npm, "install"], cwd=gui_dir, check=False)
+        if installed.returncode != 0:
+            return EXIT_USER_ERROR
+    env = {
+        **os.environ,
+        "CORPUSQA_PYTHON": sys.executable,
+        "CORPUSQA_CONFIG": str(config_path.resolve()),
+    }
+    return subprocess.run([npm, "start"], cwd=gui_dir, env=env, check=False).returncode
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -128,6 +173,8 @@ def main(argv: list[str] | None = None) -> int:
         Process exit code.
     """
     args = _build_parser().parse_args(argv)
+    if args.command == "gui":
+        return _cmd_gui(args.config)
     if args.command == "gui-backend":
         from corpusqa.gui_backend.server import run_backend
 

@@ -44,6 +44,57 @@ corpusqa answers these by **having an LLM judge raw document text** — never su
 
 If you reserve "RAG" for dense vector retrieval, then no — corpusqa has no embedding index. If you use it for any retrieve-then-generate pipeline, then yes: corpusqa is RAG that swapped the embedding retriever for an LLM judge (routed mode) or for brute force (sweep mode). Either way, the point is the same: relevance here is *decided by reading*, not by vector distance.
 
+## Desktop GUI
+
+corpusqa also has an Electron desktop app: pick a folder, type a question, and
+findings appear as each file finishes. The first step is labelled "Converting
+documents" (the incremental conversion of new or changed files). It uses the same
+`corpusqa.yaml` as the CLI, so settings saved in either place apply to both.
+
+**Packaged app** (built as described in `packaging/README.md`): an AppImage or
+`.deb` on Linux, an NSIS installer on Windows. The config and `.env` live in the
+per-user app data folder and are seeded from `corpusqa.example.yaml` on first
+launch. Docling downloads its PDF models the first time a PDF is converted.
+LibreOffice, Ollama and LM Studio are not bundled; install them separately.
+
+**From source** (needs Node.js): `corpusqa gui [--config PATH]` runs
+`npm install` in `gui/` if needed, then starts the app with the current Python
+interpreter. The backend reads `.env` from the config file's directory.
+
+**Providers**
+- *Ollama*: start the server (default `http://localhost:11434`); models are listed
+  automatically.
+- *LM Studio*: start its local server (`http://localhost:1234/v1`). LM Studio fixes
+  a model's context length when it loads it, so load the model with a context at
+  least as large as the configured Context window; a run stops up front if the
+  loaded context is smaller. Prefer non-thinking models for extraction: a thinking
+  model can spend its whole output budget reasoning and return nothing.
+- *OpenRouter*: put the key in `.env` (e.g. `OPENROUTER_API_KEY=...`) and set the
+  provider's `api_key_env` to that variable name. Keys are never written to
+  `corpusqa.yaml`. Paid models trigger the cost confirmation dialog.
+
+**Settings drawer** (the `≡` button; saved to `corpusqa.yaml`, invalid values are
+rejected inline)
+- *Model / provider*: which LiteLLM model runs each task; the main dropdowns set all
+  four tasks, "Advanced" sets them per task. A model string can be typed by hand.
+- *Temperature*: sampling temperature for the task.
+- *Max output tokens*: cap on each reply.
+- *Context window*: tokens the model is given per call (Ollama is told to use it;
+  LM Studio must already be loaded with at least this).
+- *Section size* (`max_input_tokens`): most document tokens per extract call.
+- *Relevance*: recall, balanced or strict filtering of what counts as a hit.
+- *Mode*: auto, sweep (read everything) or route (triage with cards first).
+- *Definition*: optional sense the term must carry.
+- *Synthesize*: compose one cited prose answer instead of raw hits.
+- *Use cache*: reuse stored per-file results.
+- *Provider*: max concurrency, API base URL, and the name of the API-key
+  environment variable.
+- *Confirm above (USD)*: ask before a run whose projected cost exceeds this.
+
+**Page numbers** come from the source's page data (PDF) or from Logos `vp_` page
+bookmarks (.docx), never from the model. A range such as "p. 22–23" means the page
+boundary could not be located exactly.
+
 # Basic Use
 ```
 corpusqa index  ./my-docs

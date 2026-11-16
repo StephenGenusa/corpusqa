@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import shutil
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 from corpusqa.cli.main import EXIT_OK, EXIT_USER_ERROR, main
 
@@ -149,3 +154,52 @@ def test_explain_file_outside_corpus_exits_one(tmp_path: Path) -> None:
     outside.write_text("x", encoding="utf-8")
     code = main(["explain", str(outside), str(corpus), "--config", EXAMPLE])
     assert code == EXIT_USER_ERROR
+
+
+def test_gui_without_npm_exits_1(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(shutil, "which", lambda _: None)
+    assert main(["gui"]) == EXIT_USER_ERROR
+    assert "Install Node.js" in capsys.readouterr().err
+
+
+def test_gui_passes_python_and_config_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(cmd: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append((cmd, kwargs))
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(shutil, "which", lambda _: "/fake/npm")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.chdir(tmp_path)
+    assert main(["gui", "--config", "my.yaml"]) == EXIT_OK
+    cmd, kwargs = calls[-1]
+    assert cmd == ["/fake/npm", "start"]
+    env = kwargs["env"]
+    assert isinstance(env, dict)
+    assert env["CORPUSQA_PYTHON"] == sys.executable
+    assert env["CORPUSQA_CONFIG"] == str((tmp_path / "my.yaml").resolve())
+    assert str(kwargs["cwd"]).endswith("gui")
+
+
+def test_gui_installs_dependencies_when_node_modules_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import corpusqa.cli.main as cli
+
+    (tmp_path / "gui").mkdir()
+    monkeypatch.setattr(cli, "_repo_root", lambda: tmp_path)
+    cmds: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        cmds.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(shutil, "which", lambda _: "/fake/npm")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert main(["gui"]) == EXIT_OK
+    assert cmds == [["/fake/npm", "install"], ["/fake/npm", "start"]]
