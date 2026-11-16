@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { Backend, resolveBackend, ensureUserConfig } = require('../src/bridge');
+const { EventEmitter } = require('node:events');
+const { Backend, resolveBackend, ensureUserConfig, killTree } = require('../src/bridge');
 
 const NODE = process.execPath;
 
@@ -244,4 +245,81 @@ test('first launch seeds config from bundled example', () => {
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+const STUBBORN = 'process.stdin.resume(); process.stdin.on("end", () => {}); setInterval(() => {}, 1000)';
+
+test('stop resolves within its bound when the kill helper fails', async () => {
+  const backend = new Backend({
+    cmd: NODE,
+    args: ['-e', STUBBORN],
+    stopGraceMs: 200,
+    stopHardLimitMs: 600,
+    killTree: () => {}, // e.g. taskkill missing or refused: the child lives on
+  });
+  backend.start();
+  const child = backend.child;
+  const t0 = Date.now();
+  const code = await backend.stop();
+  const elapsed = Date.now() - t0;
+  assert.equal(code, null);
+  assert.ok(elapsed >= 550 && elapsed < 2000, `elapsed ${elapsed}`);
+  const gone = nextExit(backend);
+  child.kill('SIGKILL');
+  await gone;
+});
+
+test('stop has a default hard bound of grace + 2 s', () => {
+  const backend = new Backend({ cmd: NODE, args: ['-e', ''], stopGraceMs: 300 });
+  assert.equal(backend.stopHardLimitMs, 2300);
+});
+
+function fakeChild() {
+  const child = { pid: 4242, exitCode: null, signalCode: null, killed: [] };
+  child.kill = (sig) => child.killed.push(sig || 'SIGTERM');
+  return child;
+}
+
+function fakeSpawn(result) {
+  const calls = [];
+  const fn = (cmd, args) => {
+    calls.push([cmd, args]);
+    const tk = new EventEmitter();
+    setImmediate(() => tk.emit(result.event, result.value));
+    return tk;
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+const tick = () => new Promise((r) => setImmediate(r));
+
+test('windows killTree uses absolute taskkill and falls back on non-zero exit', async () => {
+  const child = fakeChild();
+  const spawnFn = fakeSpawn({ event: 'exit', value: 1 });
+  killTree(child, { platform: 'win32', spawnFn, env: { SystemRoot: 'D:\\Win' } });
+  await tick();
+  await tick();
+  assert.equal(spawnFn.calls[0][0], path.win32.join('D:\\Win', 'System32', 'taskkill.exe'));
+  assert.deepEqual(spawnFn.calls[0][1], ['/pid', '4242', '/T', '/F']);
+  assert.equal(child.killed.length, 1);
+});
+
+test('windows killTree falls back when taskkill cannot start', async () => {
+  const child = fakeChild();
+  const spawnFn = fakeSpawn({ event: 'error', value: new Error('ENOENT') });
+  killTree(child, { platform: 'win32', spawnFn, env: {} });
+  await tick();
+  await tick();
+  assert.equal(child.killed.length, 1);
+});
+
+test('windows killTree leaves the child alone after a clean taskkill', async () => {
+  const child = fakeChild();
+  const spawnFn = fakeSpawn({ event: 'exit', value: 0 });
+  killTree(child, { platform: 'win32', spawnFn, env: {} });
+  await tick();
+  await tick();
+  assert.equal(spawnFn.calls[0][0], path.win32.join('C:\\Windows', 'System32', 'taskkill.exe'));
+  assert.equal(child.killed.length, 0);
 });

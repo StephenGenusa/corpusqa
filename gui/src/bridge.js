@@ -11,6 +11,8 @@ const DEFAULT_STOP_GRACE_MS = 3000;
 // After 'exit', wait this long for the stdio streams to close (a grandchild
 // such as soffice may hold them open) before finishing anyway.
 const CLOSE_WAIT_MS = 500;
+// How long stop() waits after the kill for the exit before giving up.
+const STOP_KILL_WAIT_MS = 2000;
 
 /**
  * Works out how to start the Python backend.
@@ -77,14 +79,23 @@ class Backend extends EventEmitter {
    * @param {string} [o.cwd] working directory
    * @param {object} [o.env] environment (defaults to this process's)
    * @param {number} [o.stopGraceMs] wait after closing stdin before killing
+   * @param {number} [o.stopHardLimitMs] longest `stop()` waits in all
+   *   (default: grace + 2 s), so quitting never hangs on a child that survives
+   *   its kill
+   * @param {(child: object) => void} [o.killTree] kills the child's process
+   *   tree (injectable for tests)
    */
-  constructor({ cmd, args, python, configPath, cwd, env, stopGraceMs } = {}) {
+  constructor({
+    cmd, args, python, configPath, cwd, env, stopGraceMs, stopHardLimitMs, killTree: kill,
+  } = {}) {
     super();
     this.cmd = cmd || python;
     this.args = args || ['-m', 'corpusqa.gui_backend', '--config', configPath];
     this.cwd = cwd;
     this.env = env || process.env;
     this.stopGraceMs = stopGraceMs ?? DEFAULT_STOP_GRACE_MS;
+    this.stopHardLimitMs = stopHardLimitMs ?? this.stopGraceMs + STOP_KILL_WAIT_MS;
+    this.killTree = kill || killTree;
     this.child = null;
     this.running = false;
     this.pending = new Map();
@@ -203,21 +214,30 @@ class Backend extends EventEmitter {
 
   /**
    * Closes stdin so the backend can finish cleanly, then kills it if it has
-   * not exited within the grace period.
+   * not exited within the grace period. Always settles within
+   * `stopHardLimitMs`, even if the child survives the kill.
    *
-   * @returns {Promise<number|null>} the exit code (null if killed or not running)
+   * @returns {Promise<number|null>} the exit code (null if killed, not
+   *   running, or still alive at the hard limit)
    */
   stop() {
     const child = this.child;
     if (!child || !this.running) return Promise.resolve(null);
     return new Promise((resolve) => {
-      let timer = null;
-      this.once('exit', ({ code }) => {
-        clearTimeout(timer);
+      let killTimer = null;
+      let hardTimer = null;
+      const onExit = ({ code }) => {
+        clearTimeout(killTimer);
+        clearTimeout(hardTimer);
         resolve(code);
-      });
+      };
+      this.once('exit', onExit);
       child.stdin.end();
-      timer = setTimeout(() => killTree(child), this.stopGraceMs);
+      killTimer = setTimeout(() => this.killTree(child), this.stopGraceMs);
+      hardTimer = setTimeout(() => {
+        this.removeListener('exit', onExit);
+        resolve(null);
+      }, this.stopHardLimitMs);
     });
   }
 }
@@ -225,17 +245,32 @@ class Backend extends EventEmitter {
 /**
  * Kills the child and its descendants (e.g. a `soffice` it started): its
  * process group on POSIX, `taskkill /T` on Windows, where `child.kill()`
- * would end only the backend itself.
+ * would end only the backend itself. If taskkill cannot start or fails, the
+ * backend itself is still killed.
+ *
+ * @param {object} child the ChildProcess
+ * @param {object} [o] overrides for tests
+ * @param {string} [o.platform] `process.platform`
+ * @param {Function} [o.spawnFn] `child_process.spawn`
+ * @param {object} [o.env] environment (for `SystemRoot`)
  */
-function killTree(child) {
+function killTree(child, { platform = process.platform, spawnFn = spawn, env = process.env } = {}) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   try {
-    if (process.platform === 'win32' && child.pid) {
-      const tk = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+    if (platform === 'win32' && child.pid) {
+      // Absolute path: a taskkill.exe earlier on PATH must not be run.
+      const taskkill = path.win32.join(env.SystemRoot || 'C:\\Windows', 'System32', 'taskkill.exe');
+      const tk = spawnFn(taskkill, ['/pid', String(child.pid), '/T', '/F'], {
         stdio: 'ignore',
         windowsHide: true,
       });
-      tk.on('error', () => child.kill());
+      const fallback = () => {
+        try { child.kill(); } catch { /* already gone */ }
+      };
+      tk.on('error', fallback);
+      tk.on('exit', (code) => {
+        if (code !== 0) fallback();
+      });
     } else if (child.pid) {
       process.kill(-child.pid, 'SIGKILL');
     } else {
@@ -281,4 +316,4 @@ function ensureUserConfig(userData, examplePath) {
   return configPath;
 }
 
-module.exports = { Backend, resolveBackend, ensureUserConfig };
+module.exports = { Backend, resolveBackend, ensureUserConfig, killTree };
