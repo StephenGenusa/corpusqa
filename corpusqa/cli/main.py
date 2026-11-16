@@ -122,6 +122,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "gui-backend", help="stdio JSON-lines backend for the desktop GUI"
     )
     p_gui.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
+    p_gui.add_argument(
+        "--env-file",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=".env file to load (default: the one next to the config file)",
+    )
 
     return parser
 
@@ -183,7 +190,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "gui-backend":
         from corpusqa.gui_backend.server import run_backend
 
-        return run_backend(args.config, args.verbose)
+        return run_backend(args.config, args.verbose, args.env_file)
     log_dir = None
     if args.command in ("index", "query", "estimate"):
         log_dir = index_paths(args.directory.resolve())[0] / "logs"

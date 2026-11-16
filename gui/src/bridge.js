@@ -15,25 +15,35 @@ const CLOSE_WAIT_MS = 500;
 /**
  * Works out how to start the Python backend.
  *
- * Python: `CORPUSQA_PYTHON`, else the repo's `.venv` interpreter if present,
- * else `python` on PATH. Config: `CORPUSQA_CONFIG`, else
- * `<repo>/corpusqa.yaml`.
+ * Packaged: the frozen backend in `<resources>/backend/`, with the config
+ * and `.env` in the per-user app data folder.
+ *
+ * Development: Python is `CORPUSQA_PYTHON`, else the repo's `.venv`
+ * interpreter if present, else `python` on PATH. Config: `CORPUSQA_CONFIG`,
+ * else `<repo>/corpusqa.yaml`.
  *
  * @param {object} o
  * @param {boolean} o.isPackaged running from an installed build
- * @param {string} o.resourcesPath Electron resources directory (packaged)
+ * @param {string} [o.resourcesPath] Electron resources directory (packaged)
  * @param {string} o.platform `process.platform`
- * @param {string} o.repoRoot repository root (parent of `gui/`)
- * @param {object} o.env environment variables
+ * @param {string} [o.userData] per-user app data folder (packaged)
+ * @param {string} [o.repoRoot] repository root, parent of `gui/` (development)
+ * @param {object} [o.env] environment variables (development)
  * @param {(p: string) => boolean} [o.exists] file-exists check
- * @returns {{cmd: string, args: string[], cwd: string}}
+ * @returns {{cmd: string, args: string[], cwd?: string}}
  */
-function resolveBackend({ isPackaged, resourcesPath, platform, repoRoot, env, exists }) {
-  void resourcesPath;
-  if (isPackaged) {
-    throw new Error('packaged backend resolution is not implemented yet');
-  }
+function resolveBackend({ isPackaged, resourcesPath, platform, userData, repoRoot, env, exists }) {
   const p = platform === 'win32' ? path.win32 : path.posix;
+  if (isPackaged) {
+    const exe = platform === 'win32' ? 'corpusqa-backend.exe' : 'corpusqa-backend';
+    return {
+      cmd: p.join(resourcesPath, 'backend', exe),
+      args: [
+        '--config', p.join(userData, 'corpusqa.yaml'),
+        '--env-file', p.join(userData, '.env'),
+      ],
+    };
+  }
   const fileExists = exists || fs.existsSync;
   const venvPython =
     platform === 'win32'
@@ -212,12 +222,25 @@ class Backend extends EventEmitter {
   }
 }
 
-/** Kills the child (and, on POSIX, its process group). */
+/**
+ * Kills the child and its descendants (e.g. a `soffice` it started): its
+ * process group on POSIX, `taskkill /T` on Windows, where `child.kill()`
+ * would end only the backend itself.
+ */
 function killTree(child) {
   if (child.exitCode !== null || child.signalCode !== null) return;
   try {
-    if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
-    else child.kill();
+    if (process.platform === 'win32' && child.pid) {
+      const tk = spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      tk.on('error', () => child.kill());
+    } else if (child.pid) {
+      process.kill(-child.pid, 'SIGKILL');
+    } else {
+      child.kill();
+    }
   } catch {
     try { child.kill('SIGKILL'); } catch { /* already gone */ }
   }
@@ -239,4 +262,23 @@ function createStderrSplitter(onLine) {
   return feed;
 }
 
-module.exports = { Backend, resolveBackend };
+/**
+ * Makes sure the per-user config exists, copying the bundled example on
+ * first launch. An existing config is never overwritten.
+ *
+ * @param {string} userData per-user app data folder (created if missing)
+ * @param {string} examplePath the bundled `corpusqa.example.yaml`
+ * @returns {string} path of the user's `corpusqa.yaml`
+ */
+function ensureUserConfig(userData, examplePath) {
+  const configPath = path.join(userData, 'corpusqa.yaml');
+  fs.mkdirSync(userData, { recursive: true });
+  try {
+    fs.copyFileSync(examplePath, configPath, fs.constants.COPYFILE_EXCL);
+  } catch (err) {
+    if (err.code !== 'EEXIST') throw err;
+  }
+  return configPath;
+}
+
+module.exports = { Backend, resolveBackend, ensureUserConfig };

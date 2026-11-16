@@ -3,12 +3,41 @@
   "version": "0.1.0",
   "private": true,
   "description": "Desktop GUI for corpusqa",
+  "author": "Stephen Genusa",
+  "license": "MIT",
+  "homepage": "https://github.com/StephenGenusa/corpusqa",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "dist": "electron-builder"
   },
   "devDependencies": {
-    "electron": "45.3.2"
+    "electron": "45.3.2",
+    "electron-builder": "26.18.1"
+  },
+  "build": {
+    "appId": "com.corpusqa.gui",
+    "productName": "corpusqa",
+    "files": [
+      "main.js",
+      "preload.js",
+      "smoke.js",
+      "src/**",
+      "renderer/**",
+      "package.json"
+    ],
+    "extraResources": [
+      { "from": "../dist/corpusqa-backend", "to": "backend" },
+      { "from": "../corpusqa.example.yaml", "to": "corpusqa.example.yaml" }
+    ],
+    "linux": {
+      "target": ["AppImage", "deb"],
+      "category": "Office",
+      "maintainer": "Stephen Genusa"
+    },
+    "win": {
+      "target": ["nsis"]
+    }
   }
 }

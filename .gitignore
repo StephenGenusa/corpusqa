@@ -35,3 +35,6 @@ local/
 
 # Electron GUI dependencies
 gui/node_modules/
+
+# Electron installers
+gui/dist/

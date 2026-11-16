@@ -21,6 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.10", "types-PyYAML", "types-tqdm"]
+build = ["pyinstaller>=6"]
 
 [project.scripts]
 corpusqa = "corpusqa.cli.main:main"

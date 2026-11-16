@@ -2,7 +2,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { Backend, resolveBackend } = require('../src/bridge');
+const fs = require('node:fs');
+const os = require('node:os');
+const { Backend, resolveBackend, ensureUserConfig } = require('../src/bridge');
 
 const NODE = process.execPath;
 
@@ -199,12 +201,47 @@ test('resolveBackend falls back to python on PATH', () => {
   assert.equal(got.cmd, 'python');
 });
 
-test('resolveBackend has no packaged branch yet', () => {
-  assert.throws(
-    () => resolveBackend({
-      isPackaged: true, resourcesPath: '/x', platform: 'linux', repoRoot: linuxRepo,
-      env: {}, exists: () => true,
-    }),
-    /packaged/,
-  );
+// --- resolveBackend (packaged branch) and first-launch config ---
+
+test('packaged mode resolves bundled backend with config and env file', () => {
+  const r = resolveBackend({
+    isPackaged: true, resourcesPath: '/r', platform: 'linux', userData: '/u',
+    env: { CORPUSQA_PYTHON: '/ignored/python', CORPUSQA_CONFIG: '/ignored.yaml' },
+  });
+  assert.deepEqual(r, {
+    cmd: '/r/backend/corpusqa-backend',
+    args: ['--config', '/u/corpusqa.yaml', '--env-file', '/u/.env'],
+  });
+});
+
+test('windows packaged backend has .exe', () => {
+  const r = resolveBackend({
+    isPackaged: true, resourcesPath: 'C:\\App\\resources', platform: 'win32',
+    userData: 'C:\\Users\\me\\AppData\\Roaming\\corpusqa', env: {},
+  });
+  assert.deepEqual(r, {
+    cmd: 'C:\\App\\resources\\backend\\corpusqa-backend.exe',
+    args: [
+      '--config', 'C:\\Users\\me\\AppData\\Roaming\\corpusqa\\corpusqa.yaml',
+      '--env-file', 'C:\\Users\\me\\AppData\\Roaming\\corpusqa\\.env',
+    ],
+  });
+});
+
+test('first launch seeds config from bundled example', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cqa-ud-'));
+  try {
+    const userData = path.join(dir, 'userData'); // does not exist yet
+    const example = path.join(dir, 'corpusqa.example.yaml');
+    fs.writeFileSync(example, 'version: 1 # example\n');
+    const cfg = ensureUserConfig(userData, example);
+    assert.equal(cfg, path.join(userData, 'corpusqa.yaml'));
+    assert.equal(fs.readFileSync(cfg, 'utf8'), 'version: 1 # example\n');
+    fs.writeFileSync(cfg, 'mine: true\n');
+    fs.writeFileSync(example, 'changed: true\n');
+    assert.equal(ensureUserConfig(userData, example), cfg);
+    assert.equal(fs.readFileSync(cfg, 'utf8'), 'mine: true\n');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

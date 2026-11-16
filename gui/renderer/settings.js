@@ -121,6 +121,12 @@ export class SettingsDrawer {
       ),
       this.body,
       h('div', { class: 'drawer-foot' },
+        h('button', {
+          type: 'button',
+          title: 'Show corpusqa.yaml and .env in the file manager',
+          text: 'Open config folder',
+          onclick: () => window.corpusqa.openConfigFolder(),
+        }),
         this.status,
         h('button', { type: 'button', class: 'primary', text: 'Save', disabled: !this.config, onclick: () => this.save() }),
       ),

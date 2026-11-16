@@ -17,4 +17,6 @@ contextBridge.exposeInMainWorld('corpusqa', {
   backendStatus: () => ipcRenderer.invoke('backend-status'),
   /** Stops (if needed) and restarts the backend process. */
   restartBackend: () => ipcRenderer.invoke('backend-restart'),
+  /** Reveals the config file (and its `.env`) in the file manager. */
+  openConfigFolder: () => ipcRenderer.invoke('open-config-folder'),
 });

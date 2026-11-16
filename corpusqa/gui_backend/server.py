@@ -653,12 +653,16 @@ def _claim_stdout() -> TextIO:
     return os.fdopen(protocol_fd, "w", encoding="utf-8", newline="\n")
 
 
-def run_backend(config_path: Path, verbosity: int = 0) -> int:
+def run_backend(
+    config_path: Path, verbosity: int = 0, env_path: Path | None = None
+) -> int:
     """Runs the backend on the process's stdin/stdout until stdin closes.
 
     Args:
         config_path: The configuration file.
         verbosity: 0 (warnings), 1 (info) or 2+ (debug) logging on stderr.
+        env_path: ``.env`` to load at startup; None means the one next to
+            the config file.
 
     Returns:
         Process exit code.
@@ -669,7 +673,7 @@ def run_backend(config_path: Path, verbosity: int = 0) -> int:
     with open(  # noqa: PTH123 -- fd 0, not a path
         0, encoding="utf-8", errors="replace", closefd=False
     ) as instream:
-        asyncio.run(Server(config_path, instream, out).serve())
+        asyncio.run(Server(config_path, instream, out, env_path=env_path).serve())
     out.flush()
     return 0
 
@@ -685,6 +689,13 @@ def main(argv: list[str] | None = None) -> int:
     """
     parser = argparse.ArgumentParser(prog="corpusqa gui-backend")
     parser.add_argument("--config", type=Path, default=Path("corpusqa.yaml"))
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=None,
+        metavar="PATH",
+        help=".env file to load (default: the one next to the config file)",
+    )
     parser.add_argument("-v", "--verbose", action="count", default=0)
     args = parser.parse_args(argv)
-    return run_backend(args.config, args.verbose)
+    return run_backend(args.config, args.verbose, args.env_file)

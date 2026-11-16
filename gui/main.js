@@ -1,13 +1,14 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, ipcMain, nativeTheme } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } = require('electron');
 const path = require('node:path');
-const { Backend, resolveBackend } = require('./src/bridge');
+const { Backend, ensureUserConfig, resolveBackend } = require('./src/bridge');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 
 let win = null;
 let backend = null;
+let configPath = null;
 let backendStopped = false;
 let stopping = false;
 
@@ -16,13 +17,25 @@ function send(event) {
 }
 
 function createBackend() {
+  const userData = app.getPath('userData');
+  if (app.isPackaged) {
+    // First launch: start from the bundled example config. A failure here
+    // surfaces as the backend's own "cannot read config" error.
+    try {
+      ensureUserConfig(userData, path.join(process.resourcesPath, 'corpusqa.example.yaml'));
+    } catch (err) {
+      process.stderr.write(`cannot create ${userData}/corpusqa.yaml: ${err.message}\n`);
+    }
+  }
   const spec = resolveBackend({
     isPackaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     platform: process.platform,
+    userData,
     repoRoot: REPO_ROOT,
     env: process.env,
   });
+  configPath = spec.args[spec.args.indexOf('--config') + 1];
   backend = new Backend(spec);
   backend.on('event', send);
   backend.on('exit', (info) => send({ event: 'backend.exit', ...info }));
@@ -79,6 +92,11 @@ ipcMain.handle('backend-restart', async () => {
   await backend.stop();
   backend.start();
   return true;
+});
+
+ipcMain.handle('open-config-folder', () => {
+  if (configPath) shell.showItemInFolder(configPath);
+  return configPath;
 });
 
 ipcMain.handle('pick-folder', async (_e, defaultPath) => {

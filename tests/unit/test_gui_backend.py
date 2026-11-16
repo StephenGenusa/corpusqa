@@ -740,6 +740,51 @@ def test_stdout_carries_only_protocol_lines(tmp_path: Path, entry: list[str]) ->
         assert "LEAK from fd 1" in proc.stderr.decode()
 
 
+_ENV_PROBE = (
+    "import os, sys\n"
+    "from corpusqa.gui_backend import server\n"
+    "real = server.Server._startup\n"
+    "def probe(self):\n"
+    "    real(self)\n"
+    "    sys.stderr.write('PROBE=%s\\n' % os.environ.get('CQA_ENV_FILE_PROBE'))\n"
+    "server.Server._startup = probe\n"
+    "if sys.argv[1] == 'cli':\n"
+    "    from corpusqa.cli.main import main\n"
+    "    raise SystemExit(main(['gui-backend', *sys.argv[2:]]))\n"
+    "raise SystemExit(server.main(sys.argv[2:]))\n"
+)
+
+
+@pytest.mark.parametrize("entry", ["module", "cli"])
+def test_env_file_flag_loads_given_file(
+    tmp_path: Path, entry: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("CQA_ENV_FILE_PROBE", raising=False)
+    cfg = _write_config(tmp_path)
+    (cfg.parent / ".env").write_text("CQA_ENV_FILE_PROBE=next-to-config\n")
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    (other / "custom.env").write_text("CQA_ENV_FILE_PROBE=1\n", encoding="utf-8")
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _ENV_PROBE,
+            entry,
+            "--config",
+            str(cfg),
+            "--env-file",
+            str(other / "custom.env"),
+        ],
+        input=b"",
+        capture_output=True,
+        timeout=120,
+        cwd=REPO,
+    )
+    assert proc.returncode == 0, proc.stderr.decode()
+    assert "PROBE=1\n" in proc.stderr.decode()
+
+
 _REMOTE = (
     "  remote:\n"
     '    api_base: "https://example.invalid/v1"\n'
