@@ -73,23 +73,27 @@ interpreter. The backend reads `.env` from the config file's directory.
   provider's `api_key_env` to that variable name. Keys are never written to
   `corpusqa.yaml`. Paid models trigger the cost confirmation dialog.
 
-**Settings drawer** (the `≡` button; saved to `corpusqa.yaml`, invalid values are
-rejected inline)
-- *Model / provider*: which LiteLLM model runs each task; the main dropdowns set all
-  four tasks, "Advanced" sets them per task. A model string can be typed by hand.
-- *Temperature*: sampling temperature for the task.
-- *Max output tokens*: cap on each reply.
-- *Context window*: tokens the model is given per call (Ollama is told to use it;
-  LM Studio must already be loaded with at least this).
-- *Section size* (`max_input_tokens`): most document tokens per extract call.
-- *Relevance*: recall, balanced or strict filtering of what counts as a hit.
-- *Mode*: auto, sweep (read everything) or route (triage with cards first).
-- *Definition*: optional sense the term must carry.
-- *Synthesize*: compose one cited prose answer instead of raw hits.
-- *Use cache*: reuse stored per-file results.
-- *Provider*: max concurrency, API base URL, and the name of the API-key
-  environment variable.
-- *Confirm above (USD)*: ask before a run whose projected cost exceeds this.
+**Settings drawer** (the `≡` button)
+
+*Run options* (relevance, mode, synthesize, cache) are remembered on this
+computer, not in `corpusqa.yaml`, as is the main form's optional *Definition*
+field (the sense the term must carry):
+- *Relevance*: Recall, Balanced or Strict filtering of what counts as a hit.
+- *Mode*: Auto, Sweep (read every file) or Route (choose files first).
+- *Write an answer from the findings (synthesize)*: one cited prose answer
+  instead of raw hits.
+- *Reuse earlier readings of unchanged files (cache)*: reuse stored results.
+
+*Tasks*, *Providers* and *Budget* are saved to `corpusqa.yaml` with the Save
+button; invalid values are rejected inline.
+- *Tasks* (per task): *Temperature*; *Max output tokens*; *Context window* (tokens
+  per call; Ollama is told to use it, LM Studio must already be loaded with at
+  least this); *Max input tokens* (section size per call, extract and catalog
+  tasks); and under "Advanced" a per-task *Model* and *Provider*. The model and
+  provider in the top bar apply to all four tasks.
+- *Providers* (per provider): *Max concurrent calls*; *API base URL*; *API key
+  variable* (the name of an environment variable or `.env` entry, never the key).
+- *Budget*: *Ask before spending more than (USD)*.
 
 **Page numbers** come from the source's page data (PDF) or from Logos `vp_` page
 bookmarks (.docx), never from the model. A range such as "p. 22–23" means the page

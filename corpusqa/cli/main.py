@@ -160,7 +160,12 @@ def _cmd_gui(config_path: Path) -> int:
         "CORPUSQA_PYTHON": sys.executable,
         "CORPUSQA_CONFIG": str(config_path.resolve()),
     }
-    return subprocess.run([npm, "start"], cwd=gui_dir, env=env, check=False).returncode
+    try:
+        return subprocess.run(
+            [npm, "start"], cwd=gui_dir, env=env, check=False
+        ).returncode
+    except KeyboardInterrupt:
+        return 130
 
 
 def main(argv: list[str] | None = None) -> int:

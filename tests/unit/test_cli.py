@@ -203,3 +203,12 @@ def test_gui_installs_dependencies_when_node_modules_missing(
     monkeypatch.setattr(subprocess, "run", fake_run)
     assert main(["gui"]) == EXIT_OK
     assert cmds == [["/fake/npm", "install"], ["/fake/npm", "start"]]
+
+
+def test_gui_keyboard_interrupt_returns_130(monkeypatch: pytest.MonkeyPatch) -> None:
+    def interrupted(cmd: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(shutil, "which", lambda _: "/fake/npm")
+    monkeypatch.setattr(subprocess, "run", interrupted)
+    assert main(["gui"]) == 130
