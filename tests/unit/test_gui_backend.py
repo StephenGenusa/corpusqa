@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue
 import subprocess
 import sys
@@ -547,6 +548,37 @@ def test_lm_studio_unreachable_or_raising_errors_before_work(
     events = h.events()
     assert events[0]["event"] == "error" and "bad port" in events[0]["message"]
     assert not any(e["event"] == "progress" for e in events)
+
+
+def test_run_writes_a_log_file_under_the_corpus(
+    md_corpus: Path, tmp_path: Path, harness: Callable[..., Harness]
+) -> None:
+    fake = FakeClient({TaskName.EXTRACT: [_extraction()]})
+    h = harness(_write_config(tmp_path), client=fake)
+    h.send(_start(md_corpus))
+    h.event("done")
+    logs = list((md_corpus / ".corpusqa" / "logs").glob("run-*.log"))
+    assert len(logs) == 1
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+    reason="chmod does not make a folder read-only here",
+)
+def test_read_only_folder_gives_a_clear_error(
+    md_corpus: Path, tmp_path: Path, harness: Callable[..., Harness]
+) -> None:
+    md_corpus.chmod(0o555)
+    try:
+        h = harness(_write_config(tmp_path), client=FakeClient({}))
+        h.send(_start(md_corpus))
+        error = h.event("error")
+        done = h.event("done")
+    finally:
+        md_corpus.chmod(0o755)
+    assert "must be writable" in error["message"]
+    assert ".corpusqa" in error["message"]
+    assert done["cancelled"] is False
 
 
 def test_second_run_start_is_rejected(

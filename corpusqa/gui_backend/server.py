@@ -22,7 +22,9 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import sys
+import tempfile
 import threading
 import uuid
 from collections.abc import Awaitable, Callable
@@ -65,6 +67,7 @@ from corpusqa.gui_backend.protocol import (
 from corpusqa.ingest.pipeline import index_paths, run_index
 from corpusqa.llm.tasks import LLMTaskClient
 from corpusqa.logging_setup import configure as configure_logging
+from corpusqa.logging_setup import run_log_file
 from corpusqa.query.budget import CostEstimate
 from corpusqa.query.extractor import ExtractionResult
 from corpusqa.query.pipeline import _load_page_map, run_query
@@ -95,6 +98,32 @@ class LineWriter(Protocol):
     def flush(self) -> None:
         """Flushes buffered output."""
         ...
+
+
+def _unwritable_message(folder: Path, exc: BaseException) -> str:
+    """Explains that the corpus folder must be writable."""
+    index_dir = index_paths(folder)[0]
+    return (
+        f"cannot write to {index_dir}: corpusqa stores converted text in "
+        f"<folder>/.corpusqa, so the folder must be writable ({exc})"
+    )
+
+
+def _writable_index_dir(folder: Path) -> Path:
+    """Returns the corpus's index directory after checking it can be written.
+
+    Raises:
+        _PreflightError: When the folder (or an existing ``.corpusqa``) is
+            read-only, with a message saying why it must be writable.
+    """
+    index_dir = index_paths(folder.resolve())[0]
+    try:
+        index_dir.mkdir(exist_ok=True)
+        with tempfile.TemporaryFile(dir=index_dir):
+            pass
+    except OSError as exc:
+        raise _PreflightError(_unwritable_message(folder, exc)) from exc
+    return index_dir
 
 
 class _PreflightError(Exception):
@@ -173,6 +202,7 @@ class Server:
         client_factory: Builds the LLM client for a run (tests inject a
             fake); None lets ``run_query`` build the real one.
         list_models_fn: Model lister (tests inject a stub).
+        verbosity: Run log file detail: 0/1 INFO, 2+ DEBUG.
     """
 
     def __init__(
@@ -184,6 +214,7 @@ class Server:
         env_path: Path | None = None,
         client_factory: ClientFactory | None = None,
         list_models_fn: ListModels = list_models,
+        verbosity: int = 0,
     ) -> None:
         """Initializes the server; nothing runs until ``serve``."""
         self._config_path = config_path.absolute()
@@ -192,6 +223,7 @@ class Server:
         self._out = outstream
         self._client_factory = client_factory
         self._list_models = list_models_fn
+        self._verbosity = verbosity
         self._write_lock = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._queue: asyncio.Queue[Request | None] | None = None
@@ -437,6 +469,11 @@ class Server:
             done = DoneEvent(cancelled=True)
         except (_PreflightError, CorpusQAError) as exc:
             self.emit(ErrorEvent(message=str(exc)))
+        except (PermissionError, sqlite3.OperationalError) as exc:
+            # The folder became unwritable mid-run, or its catalog is
+            # read-only ("unable to open database file", "readonly database").
+            _log.warning("run %s cannot write its index: %s", run_id, exc)
+            self.emit(ErrorEvent(message=_unwritable_message(Path(params.folder), exc)))
         except Exception as exc:  # noqa: BLE001 -- the GUI must hear about it
             _log.exception("run %s failed", run_id)
             self.emit(ErrorEvent(message=f"{type(exc).__name__}: {exc}"))
@@ -450,7 +487,6 @@ class Server:
     async def _execute(
         self, params: RunStartParams, config: AppConfig, run_id: str
     ) -> DoneEvent:
-        folder = Path(params.folder)
         self._phase = "preflight"
         # Check only the tasks this run uses. Auto mode picks sweep or route
         # from the parseable file count, known only after conversion, so its
@@ -463,7 +499,17 @@ class Server:
         await self._preflight(config, tasks)
         if self._cancel.is_set():
             return DoneEvent(cancelled=True)
+        # Only now touch the folder: a failed preflight leaves it untouched.
+        index_dir = _writable_index_dir(Path(params.folder))
+        # Each run logs to <corpus>/.corpusqa/logs, as a CLI query does.
+        with run_log_file(index_dir / "logs", self._verbosity) as log_path:
+            _log.info("gui run=%s folder=%s log=%s", run_id, params.folder, log_path)
+            return await self._convert_and_query(params, config, run_id)
 
+    async def _convert_and_query(
+        self, params: RunStartParams, config: AppConfig, run_id: str
+    ) -> DoneEvent:
+        folder = Path(params.folder)
         self._phase = "converting"
         report = await asyncio.to_thread(
             run_index,
@@ -673,7 +719,10 @@ def run_backend(
     with open(  # noqa: PTH123 -- fd 0, not a path
         0, encoding="utf-8", errors="replace", closefd=False
     ) as instream:
-        asyncio.run(Server(config_path, instream, out, env_path=env_path).serve())
+        server = Server(
+            config_path, instream, out, env_path=env_path, verbosity=verbosity
+        )
+        asyncio.run(server.serve())
     out.flush()
     return 0
 
