@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,7 @@ def save_config_changes(path: Path, changes: list[ConfigChange]) -> AppConfig:
         ConfigError: If the file cannot be read or the result is invalid. The
             file is left untouched in that case.
     """
+    path = path.resolve()
     yaml = YAML(typ="rt")
     yaml.preserve_quotes = True
     yaml.width = 4096
@@ -80,6 +82,7 @@ def save_config_changes(path: Path, changes: list[ConfigChange]) -> AppConfig:
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
             yaml.dump(data, handle)
+        shutil.copymode(path, tmp_name)
         os.replace(tmp_name, path)
     except BaseException:
         with contextlib.suppress(OSError):

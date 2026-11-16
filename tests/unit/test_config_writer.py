@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import difflib
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -76,3 +78,23 @@ def test_config_as_dict_is_json_safe(tmp_path: Path) -> None:
     json.dumps(data)
     tasks = data["tasks"]
     assert isinstance(tasks, dict) and "extract" in tasks
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+def test_file_mode_preserved(tmp_path: Path) -> None:
+    p = _write(tmp_path)
+    p.chmod(0o644)
+    save_config_changes(p, [(("tasks", "extract", "temperature"), 0.4)])
+    assert stat.S_IMODE(p.stat().st_mode) == 0o644
+
+
+def test_symlinked_config_stays_symlink(tmp_path: Path) -> None:
+    target = _write(tmp_path)
+    link = tmp_path / "link.yaml"
+    try:
+        link.symlink_to(target)
+    except OSError:
+        pytest.skip("symlinks not creatable")
+    save_config_changes(link, [(("tasks", "extract", "temperature"), 0.4)])
+    assert link.is_symlink()
+    assert load_config(target).tasks[TaskName.EXTRACT].temperature == 0.4
