@@ -18,13 +18,17 @@ from typing import Any
 
 import litellm
 
-from corpusqa.config.schema import AppConfig, TaskConfig, TaskName
+from corpusqa.config.schema import AppConfig, TaskConfig, TaskName, provider_kind
 from corpusqa.errors import LLMError
 from corpusqa.llm.pricing import cost_map_rate, task_rate
 
 _NUM_RETRIES = 3
 _LM_STUDIO_PREFIX = "lm_studio/"
-_LM_STUDIO_PLACEHOLDER_KEY = "lm-studio"
+# Sent to keyless OpenAI-compatible servers (LM Studio, vLLM, ...): LiteLLM's
+# openai path requires a key and would otherwise fall back to OPENAI_API_KEY,
+# leaking a real OpenAI key to a third-party endpoint.
+_PLACEHOLDER_KEY = "not-needed"
+_KEYLESS_KINDS = ("openai_compatible", "lm_studio")
 _OLLAMA_PREFIXES = ("ollama/", "ollama_chat/")
 _log = logging.getLogger("corpusqa.llm")
 
@@ -128,12 +132,23 @@ class LLMTaskClient:
                     f"(required by provider '{task_cfg.provider}')"
                 )
             kwargs["api_key"] = key
-        elif task_cfg.model.startswith(_LM_STUDIO_PREFIX):
-            # LM Studio ignores the key but LiteLLM's OpenAI-compatible path
-            # requires one. Its context length is fixed at model load time,
-            # so no num_ctx is sent.
-            kwargs["api_key"] = _LM_STUDIO_PLACEHOLDER_KEY
+        elif (
+            provider.api_base is not None
+            and provider_kind(task_cfg.provider, provider) in _KEYLESS_KINDS
+        ) or task_cfg.model.startswith(_LM_STUDIO_PREFIX):
+            # The server ignores the key but LiteLLM's OpenAI-compatible path
+            # requires one (and would read OPENAI_API_KEY from the
+            # environment). LM Studio's context length is fixed at model load
+            # time, so no num_ctx is sent.
+            kwargs["api_key"] = _PLACEHOLDER_KEY
         return kwargs
+
+    def _is_lm_studio(self, task_cfg: TaskConfig) -> bool:
+        """True when the task is served by LM Studio (by kind or model prefix)."""
+        provider = self._config.providers[task_cfg.provider]
+        return provider_kind(
+            task_cfg.provider, provider
+        ) == "lm_studio" or task_cfg.model.startswith(_LM_STUDIO_PREFIX)
 
     def _cost(
         self,
@@ -190,7 +205,7 @@ class LLMTaskClient:
             messages=messages,
         )
         kwargs.update(overrides)
-        if task_cfg.model.startswith(_LM_STUDIO_PREFIX):
+        if self._is_lm_studio(task_cfg):
             # LM Studio accepts only json_schema/text response formats and
             # rejects json_object with a 400; the schema-in-prompt path
             # (structured.py) still steers it to JSON.

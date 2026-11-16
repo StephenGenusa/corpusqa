@@ -95,9 +95,67 @@ def test_lm_studio_call_kwargs_have_placeholder_key_and_no_num_ctx() -> None:
     )
     cfg.tasks[TaskName.EXTRACT] = task
     kw = LLMTaskClient(cfg)._call_kwargs(task)
-    assert kw["api_key"] == "lm-studio"
+    assert kw["api_key"] == "not-needed"
     assert "num_ctx" not in kw
     assert kw["api_base"] == "http://localhost:1234/v1"
+
+
+@pytest.mark.parametrize(
+    ("kind", "model"),
+    [
+        ("openai_compatible", "openai/my-model"),
+        ("lm_studio", "openai/qwen"),
+        (None, "openai/my-model"),  # inferred openai_compatible from api_base
+    ],
+)
+def test_keyless_openai_compatible_provider_never_sends_env_openai_key(
+    monkeypatch: pytest.MonkeyPatch, kind: str | None, model: str
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-secret")
+    cfg = load_config(VALID)
+    cfg.providers["mybox"] = ProviderConfig(
+        kind=kind,  # type: ignore[arg-type]
+        api_base="http://10.0.0.5:8000/v1",
+    )
+    task = cfg.tasks[TaskName.EXTRACT].model_copy(
+        update={"model": model, "provider": "mybox"}
+    )
+    cfg.tasks[TaskName.EXTRACT] = task
+    kw = LLMTaskClient(cfg)._call_kwargs(task)
+    assert kw["api_key"] == "not-needed"
+
+
+def test_lm_studio_kind_drops_json_object_without_model_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    from typing import Any
+
+    from corpusqa.llm import tasks as llm_tasks
+    from tests.unit.test_pricing import _fake_response
+
+    cfg = load_config(VALID)
+    cfg.providers["box"] = ProviderConfig(
+        kind="lm_studio", api_base="http://localhost:1234/v1"
+    )
+    cfg.tasks[TaskName.EXTRACT] = cfg.tasks[TaskName.EXTRACT].model_copy(
+        update={"model": "openai/qwen", "provider": "box"}
+    )
+    sent: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any) -> Any:  # noqa: ANN401
+        sent.update(kwargs)
+        return _fake_response(kwargs["model"])
+
+    monkeypatch.setattr(llm_tasks.litellm, "acompletion", fake_acompletion)
+    asyncio.run(
+        LLMTaskClient(cfg).complete(
+            TaskName.EXTRACT,
+            [{"role": "user", "content": "x"}],
+            response_format={"type": "json_object"},
+        )
+    )
+    assert "response_format" not in sent
 
 
 def test_lm_studio_complete_drops_json_object_response_format(
