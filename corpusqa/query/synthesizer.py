@@ -109,7 +109,7 @@ def render_cite(item: Evidence) -> str:
     the reader sees the claim is not source-traceable rather than trusting it
     silently.
     """
-    page = f", p.{item.finding.page_no}" if item.finding.page_no else ""
+    page = f", p.{item.finding.page_label}" if item.finding.page_label else ""
     unverified = " (unverified)" if not item.finding.quote_verified else ""
     heading = item.finding.heading_path[-1] if item.finding.heading_path else ""
     if heading and not _heading_is_filename(heading, item.rel_path):
@@ -252,7 +252,9 @@ def sources_block(evidence: list[Evidence], used: set[int]) -> str:
         heading = item.finding.heading_path[-1] if item.finding.heading_path else ""
         if not heading or _heading_is_filename(heading, item.rel_path):
             heading = (
-                f"p.{item.finding.page_no}" if item.finding.page_no else "(whole file)"
+                f"p.{item.finding.page_label}"
+                if item.finding.page_label
+                else "(whole file)"
             )
         by_file.setdefault(item.rel_path, set()).add(heading)
     lines = ["Sources:"]

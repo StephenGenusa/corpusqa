@@ -271,8 +271,8 @@ def _table_anchor(item: Any) -> str | None:  # noqa: ANN401 -- docling item
     return None
 
 
-def _build_page_map(document: DoclingDocument, markdown: str) -> list[tuple[int, int]]:
-    """Builds sorted ``(markdown_offset, page_no)`` marks from docling provenance.
+def _build_page_map(document: DoclingDocument, markdown: str) -> list[tuple[int, str]]:
+    """Builds sorted ``(markdown_offset, page_label)`` marks from docling provenance.
 
     ``export_to_markdown`` discards the per-item page numbers docling records,
     so we recover them: walk items in document order, locate each item's text in
@@ -285,7 +285,7 @@ def _build_page_map(document: DoclingDocument, markdown: str) -> list[tuple[int,
     marks in page order. Empty for sources with no page provenance (md/txt) or
     scanned PDFs without a text layer.
     """
-    marks: list[tuple[int, int]] = []
+    marks: list[tuple[int, str]] = []
     cursor = 0
     last_page: int | None = None
     try:
@@ -310,7 +310,7 @@ def _build_page_map(document: DoclingDocument, markdown: str) -> list[tuple[int,
             continue
         cursor = pos + len(anchor)
         if page != last_page:
-            marks.append((pos, page))
+            marks.append((pos, str(page)))
             last_page = page
     return marks
 

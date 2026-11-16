@@ -36,7 +36,7 @@ class Hit:
     quote: str
     claim: str
     verified: bool
-    page_no: int | None = None
+    page_label: str | None = None
 
 
 def collect_hits(
@@ -54,7 +54,7 @@ def collect_hits(
             quote=finding.quote.strip(),
             claim=finding.claim.strip(),
             verified=finding.quote_verified,
-            page_no=finding.page_no,
+            page_label=finding.page_label,
         )
         for rel_path, finding in unique_relevant_findings(results)
     ]
@@ -119,7 +119,7 @@ def render_hits(
             lines.append(f"  § {heading}" if heading else "  (no heading)")
             for hit in group:
                 tag = "" if hit.verified else "  (unverified)"
-                page = f" (p.{hit.page_no})" if hit.page_no else ""
+                page = f" (p.{hit.page_label})" if hit.page_label else ""
                 lines.append(f'    "{hit.quote}"{page}{tag}')
                 if hit.claim:
                     lines.append(f"      why it matched: {hit.claim}")

@@ -22,7 +22,7 @@ def _reply(relevant: bool, confidence: float, reasoning: str, findings: int = 0)
             "confidence": confidence,
             "reasoning": reasoning,
             "findings": [
-                {"claim": f"c{i}", "quote": "q", "heading_path": [], "page_no": None}
+                {"claim": f"c{i}", "quote": "q", "heading_path": [], "page_label": None}
                 for i in range(findings)
             ],
         }

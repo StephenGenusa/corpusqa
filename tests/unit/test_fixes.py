@@ -75,13 +75,13 @@ def test_extract_file_sets_quote_verified() -> None:
                                 "claim": "real",
                                 "quote": "quick brown fox",
                                 "heading_path": ["Title"],
-                                "page_no": None,
+                                "page_label": None,
                             },
                             {
                                 "claim": "fake",
                                 "quote": "not in the document",
                                 "heading_path": ["Title"],
-                                "page_no": None,
+                                "page_label": None,
                             },
                         ],
                     }

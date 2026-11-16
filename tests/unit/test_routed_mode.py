@@ -69,7 +69,7 @@ def _extraction(relevant: bool) -> str:
                         "claim": "match",
                         "quote": "the quick brown fox jumps over the lazy dog",
                         "heading_path": [],
-                        "page_no": None,
+                        "page_label": None,
                         "quote_verified": True,
                     }
                 ]

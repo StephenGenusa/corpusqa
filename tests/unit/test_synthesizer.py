@@ -12,9 +12,11 @@ from corpusqa.query.synthesizer import (
 
 
 def _results() -> list[tuple[str, ExtractionResult]]:
-    f1 = Finding(claim="gardens help", quote="q1", heading_path=["Ideas"], page_no=None)
+    f1 = Finding(
+        claim="gardens help", quote="q1", heading_path=["Ideas"], page_label=None
+    )
     f2 = Finding(
-        claim="rivers flow", quote="q2", heading_path=["Hydro", "Flow"], page_no=3
+        claim="rivers flow", quote="q2", heading_path=["Hydro", "Flow"], page_label="3"
     )
     return [
         (

@@ -40,7 +40,7 @@ def _extraction(file_hash: str, relevant: bool) -> str:
                         "claim": "c",
                         "quote": "q",
                         "heading_path": ["Ideas"],
-                        "page_no": None,
+                        "page_label": None,
                     }
                 ]
                 if relevant

@@ -100,7 +100,7 @@ def test_query_end_to_end_with_citations(
                                 "claim": "Community gardens proposed",
                                 "quote": "Community gardens",
                                 "heading_path": ["Skills", "Ideas"],
-                                "page_no": None,
+                                "page_label": None,
                             }
                         ],
                     }
@@ -191,7 +191,12 @@ def test_citation_repair_then_uncited_marker(
             "relevant": True,
             "confidence": 0.9,
             "findings": [
-                {"claim": "c", "quote": "q", "heading_path": ["Ideas"], "page_no": None}
+                {
+                    "claim": "c",
+                    "quote": "q",
+                    "heading_path": ["Ideas"],
+                    "page_label": None,
+                }
             ],
         }
     )

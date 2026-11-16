@@ -29,6 +29,10 @@ from corpusqa.splitting import split_within_token_budget
 _log = logging.getLogger("corpusqa.query")
 
 
+PageMap = list[tuple[int, str]]
+"""Sorted ``(markdown_offset, page_label)`` marks for one converted file."""
+
+
 class Finding(BaseModel):
     """One extracted, citable finding.
 
@@ -39,10 +43,15 @@ class Finding(BaseModel):
             Derived by ``extract_file`` from where the quote actually occurs in
             the markdown -- NOT taken from the model, which cannot see the
             document's heading structure reliably and tends to invent it.
-        page_no: Source page, from the page map built at index time (the
+        page_label: Source page label (a string such as ``"7"``, ``"ii"`` or
+            ``"3a"``), from the page map built at conversion time (the
             markdown export itself carries no page information). None when
             the quote was not located or the source has no page provenance;
             never taken from the model.
+        start: Markdown offset where the first snapped span of ``quote``
+            begins. None when the quote was not located.
+        end: Markdown offset where the first snapped span ends (exclusive).
+            None when the quote was not located.
         quote_verified: Whether ``quote`` was located in the source markdown
             under robust normalization (unicode/ligature/quote/dash folding,
             de-hyphenation, markdown-decoration and whitespace/case folding).
@@ -54,7 +63,9 @@ class Finding(BaseModel):
     claim: str
     quote: str
     heading_path: list[str] = Field(default_factory=list)
-    page_no: int | None = None
+    page_label: str | None = None
+    start: int | None = None
+    end: int | None = None
     quote_verified: bool = True
 
 
@@ -369,16 +380,17 @@ def _match_spans(
     return spans
 
 
-def _page_at(page_map: list[tuple[int, int]] | None, offset: int) -> int | None:
-    """Page number for a markdown ``offset`` from sorted (offset, page) marks.
+def _page_at(page_map: PageMap | None, offset: int) -> str | None:
+    """Page label for a markdown ``offset`` from sorted (offset, label) marks.
 
-    ``page_map`` is non-decreasing in page; the page is the mark with the
+    ``page_map`` is sorted by offset; the label is the mark with the
     greatest offset <= ``offset``. None when there is no map or the offset
     precedes the first mark.
     """
     if not page_map:
         return None
-    lo, hi, page = 0, len(page_map), None
+    lo, hi = 0, len(page_map)
+    page: str | None = None
     while lo < hi:  # rightmost mark whose offset <= target
         mid = (lo + hi) // 2
         if page_map[mid][0] <= offset:
@@ -452,7 +464,7 @@ async def extract_file(
     relevance: str = "recall",
     sections: list[str] | None = None,
     on_section: Callable[[], None] | None = None,
-    page_map: list[tuple[int, int]] | None = None,
+    page_map: PageMap | None = None,
     on_completion: Callable[[Completion], None] | None = None,
 ) -> ExtractionResult:
     """Runs pass-2 extraction over one file (sectioned when oversize).
@@ -471,7 +483,7 @@ async def extract_file(
             caller already planned the work (e.g. for a progress total).
         on_section: Called once after each section's LLM result, for progress
             reporting. One call == one extraction LLM round-trip completed.
-        page_map: Sorted ``(markdown_offset, page_no)`` marks from indexing;
+        page_map: Sorted ``(markdown_offset, page_label)`` marks from conversion;
             used to stamp each verified finding's source page. None when the
             source carries no page provenance (md/txt, scanned).
         on_completion: Called with every LLM completion made for this file,
@@ -587,7 +599,7 @@ def _snap_findings(
     markdown: str,
     norm_source: str,
     source_map: list[int],
-    page_map: list[tuple[int, int]] | None,
+    page_map: PageMap | None,
 ) -> None:
     """Verifies each finding's quote against the source and sets provenance.
 
@@ -598,7 +610,9 @@ def _snap_findings(
         spans = _match_spans(finding.quote, norm_source, source_map)
         finding.quote_verified = bool(spans)
         finding.heading_path = []
-        finding.page_no = None
+        finding.page_label = None
+        finding.start = None
+        finding.end = None
         if spans:
             # Snap the displayed quote to the EXACT source text the model
             # pointed at (joined for an elided "A ... B" quote), so what the
@@ -608,7 +622,26 @@ def _snap_findings(
             )
             # Real heading path and page from where the quote actually sits.
             finding.heading_path = _heading_path_at(markdown, spans[0][0])
-            finding.page_no = _page_at(page_map, spans[0][0])
+            finding.page_label = _page_at(page_map, spans[0][0])
+            finding.start, finding.end = spans[0]
+
+
+def snap_findings(
+    result: ExtractionResult, markdown: str, page_map: PageMap | None
+) -> None:
+    """Re-verifies and re-stamps every finding of ``result`` against ``markdown``.
+
+    Public wrapper over the snapping done inside ``extract_file``: it
+    normalizes ``markdown`` itself, so cached verdicts can be re-snapped
+    without an LLM call.
+
+    Args:
+        result: The extraction result whose findings are updated in place.
+        markdown: The cached whole-file markdown.
+        page_map: Sorted ``(markdown_offset, page_label)`` marks, or None.
+    """
+    norm_source, source_map = _normalize_for_match(markdown)
+    _snap_findings(result, markdown, norm_source, source_map, page_map)
 
 
 def _merge_sections(

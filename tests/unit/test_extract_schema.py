@@ -20,7 +20,14 @@ from tests.unit.fakes import FakeClient
 
 EXAMPLE = Path(__file__).resolve().parents[2] / "corpusqa.example.yaml"
 SECTION = "# One\nThe quick brown fox jumps.\n"
-SYSTEM_ONLY = ("heading_path", "page_no", "quote_verified", "file_hash")
+SYSTEM_ONLY = (
+    "heading_path",
+    "page_label",
+    "start",
+    "end",
+    "quote_verified",
+    "file_hash",
+)
 
 
 def _extract(reply: str) -> tuple[str, object]:
@@ -74,8 +81,8 @@ def test_system_fields_are_filled_by_the_system() -> None:
 
 def test_model_output_with_system_fields_still_parses_and_is_overridden() -> None:
     _, result = _extract(
-        _reply(heading_path=["Invented"], page_no=99, quote_verified=False)
+        _reply(heading_path=["Invented"], page_label="99", quote_verified=False)
     )
     finding = result.findings[0]  # type: ignore[attr-defined]
-    assert finding.heading_path == ["One"] and finding.page_no is None
+    assert finding.heading_path == ["One"] and finding.page_label is None
     assert finding.quote_verified

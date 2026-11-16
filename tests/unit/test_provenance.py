@@ -11,12 +11,16 @@ import pytest
 
 from corpusqa.config.schema import TaskName
 from corpusqa.ingest.converter import _build_page_map
+from corpusqa.query import pipeline as qp
 from corpusqa.query.extractor import (
     _SNAP_SEPARATOR,
+    ExtractionResult,
+    Finding,
     _match_spans,
     _normalize_for_match,
     _page_at,
     extract_file,
+    snap_findings,
 )
 
 _SOURCE = (
@@ -62,11 +66,11 @@ def test_paraphrase_does_not_verify() -> None:
 
 
 def test_page_at_bisects() -> None:
-    pm = [(0, 1), (80, 2), (200, 5)]
-    assert _page_at(pm, 0) == 1
-    assert _page_at(pm, 79) == 1
-    assert _page_at(pm, 80) == 2
-    assert _page_at(pm, 250) == 5
+    pm = [(0, "1"), (80, "2"), (200, "5")]
+    assert _page_at(pm, 0) == "1"
+    assert _page_at(pm, 79) == "1"
+    assert _page_at(pm, 80) == "2"
+    assert _page_at(pm, 250) == "5"
     assert _page_at(None, 10) is None
     assert _page_at([], 10) is None
 
@@ -95,7 +99,7 @@ def test_build_page_map_marks_page_changes() -> None:
         ]
     )
     marks = _build_page_map(doc, md)
-    assert [p for _, p in marks] == [1, 2, 3]
+    assert [p for _, p in marks] == ["1", "2", "3"]
     for off, _page in marks:
         assert 0 <= off < len(md)
 
@@ -150,14 +154,14 @@ def test_extract_file_stamps_real_heading_and_page() -> None:
             FakeClient(),  # type: ignore[arg-type]
             config,  # type: ignore[arg-type]
             sections=[_SOURCE],
-            page_map=[(0, 7)],
+            page_map=[(0, "7")],
         )
     )
     finding = result.findings[0]
     assert finding.quote_verified
     assert finding.quote in _SOURCE  # snapped to source
     assert finding.heading_path == ["Chapter 3"]  # derived, not "MODEL JUNK"
-    assert finding.page_no == 7  # from page map, not the model's 99
+    assert finding.page_label == "7"  # from page map, not the model's 99
 
 
 def test_unverified_quote_carries_no_model_heading() -> None:
@@ -195,13 +199,14 @@ def test_unverified_quote_carries_no_model_heading() -> None:
             fake,  # type: ignore[arg-type]
             config,  # type: ignore[arg-type]
             sections=[_SOURCE],
-            page_map=[(0, 7)],
+            page_map=[(0, "7")],
         )
     )
     finding = result.findings[0]
     assert not finding.quote_verified
     assert finding.heading_path == []  # never the model's "Invented Heading"
-    assert finding.page_no is None
+    assert finding.page_label is None
+    assert finding.start is None and finding.end is None
 
 
 def _page_item(text: str, page: int) -> tuple[types.SimpleNamespace, int]:
@@ -223,7 +228,7 @@ def test_page_map_skips_item_only_found_before_cursor() -> None:
         ]
     )
     marks = _build_page_map(doc, md)  # type: ignore[arg-type]
-    assert [page for _, page in marks] == [1, 2]
+    assert [page for _, page in marks] == ["1", "2"]
     assert marks == sorted(marks)
 
 
@@ -269,7 +274,7 @@ def test_page_map_anchors_a_table_only_page_on_its_cells() -> None:
         ]
     )
     marks = _build_page_map(doc, md)  # type: ignore[arg-type]
-    assert marks == [(0, 1), (md.index("Events Years"), 2)]
+    assert marks == [(0, "1"), (md.index("Events Years"), "2")]
 
 
 def test_page_map_ignores_table_cells_too_short_to_place() -> None:
@@ -282,4 +287,37 @@ def test_page_map_ignores_table_cells_too_short_to_place() -> None:
             _table_item(["AM", "4"], 2),
         ]
     )
-    assert [p for _, p in _build_page_map(doc, md)] == [1]  # type: ignore[arg-type]
+    assert [p for _, p in _build_page_map(doc, md)] == ["1"]  # type: ignore[arg-type]
+
+
+def test_page_at_returns_string_labels() -> None:
+    marks = [(0, "1"), (100, "ii"), (250, "3a")]
+    assert _page_at(marks, 50) == "1"
+    assert _page_at(marks, 100) == "ii"
+    assert _page_at(marks, 999) == "3a"
+    assert _page_at(None, 5) is None
+
+
+def test_snap_sets_offsets_and_label() -> None:
+    md = "# T\n\nAlpha beta gamma delta epsilon zeta."
+    result = ExtractionResult(
+        file_hash="h",
+        relevant=True,
+        confidence=1.0,
+        findings=[Finding(claim="c", quote="gamma delta epsilon")],
+    )
+    snap_findings(result, md, [(0, "1"), (10, "2")])
+    f = result.findings[0]
+    assert f.start is not None and f.end is not None
+    assert md[f.start : f.end] == "gamma delta epsilon"
+    assert f.page_label == "2"
+
+
+def test_legacy_int_page_map_loads_as_strings(tmp_path: Path) -> None:
+    (tmp_path / "h.pages.json").write_text("[[0, 1], [40, 2]]", encoding="utf-8")
+    assert qp._load_page_map(tmp_path, "h") == [(0, "1"), (40, "2")]
+
+
+def test_finding_ignores_legacy_page_no_key() -> None:
+    f = Finding.model_validate({"claim": "c", "quote": "q", "page_no": 3})
+    assert f.page_label is None

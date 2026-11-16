@@ -340,7 +340,7 @@ class MockTaskClient:
                             "claim": "mock finding",
                             "quote": "q",
                             "heading_path": [heading.group(1) if heading else "-"],
-                            "page_no": None,
+                            "page_label": None,
                         }
                     ],
                 }

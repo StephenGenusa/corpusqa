@@ -26,6 +26,7 @@ from corpusqa.llm.tasks import Completion, LLMTaskClient
 from corpusqa.query.budget import CostEstimate, estimate_pass1, estimate_query
 from corpusqa.query.extractor import (
     ExtractionResult,
+    PageMap,
     PartialExtractionError,
     extract_file,
     extraction_fingerprint,
@@ -38,13 +39,16 @@ from corpusqa.query.synthesizer import CitedAnswer, synthesize
 _log = logging.getLogger("corpusqa.query")
 
 
-def _load_page_map(cache_dir: Path, file_hash: str) -> list[tuple[int, int]]:
-    """Loads the ``(offset, page)`` marks written at index time, or [] if none."""
+def _load_page_map(cache_dir: Path, file_hash: str) -> PageMap:
+    """Loads the ``(offset, label)`` marks written at conversion time, or [].
+
+    Legacy files stored integer page numbers; they load as strings.
+    """
     path = cache_dir / f"{file_hash}.pages.json"
     if not path.exists():
         return []
     try:
-        return [(int(o), int(p)) for o, p in json.loads(path.read_text("utf-8"))]
+        return [(int(o), str(p)) for o, p in json.loads(path.read_text("utf-8"))]
     except (ValueError, OSError, TypeError) as exc:
         _log.warning(
             "page numbers unavailable: %s is unreadable (%s); re-index with "
@@ -381,7 +385,7 @@ class _Pass2Plan:
     section_tokens: list[list[int]] = field(default_factory=list)
     cached_eval: dict[str, str | None] = field(default_factory=dict)
     sections: dict[str, list[str]] = field(default_factory=dict)
-    page_maps: dict[str, list[tuple[int, int]]] = field(default_factory=dict)
+    page_maps: dict[str, PageMap] = field(default_factory=dict)
     total_calls: int = 0
 
 
