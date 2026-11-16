@@ -275,3 +275,26 @@ def test_stale_reconversion_keeps_verdicts_and_cards(
     )
     assert fake.calls == {}
     assert got["a.md"].findings[0].page_label == "1"
+
+
+def test_failed_conversion_is_not_retried_every_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A file whose conversion raised stays as it is until it is edited (or
+    # the converter version moves on); it is not reconverted on every run.
+    class Exploding:
+        def convert(self, *_a: object, **_k: object) -> object:
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(pipeline.converter, "check_converter_available", lambda: None)
+    monkeypatch.setattr(
+        pipeline.converter, "build_converter", lambda *_a, **_k: Exploding()
+    )
+    config = load_config(EXAMPLE)
+    root = tmp_path / "corpus"
+    root.mkdir()
+    (root / "a.md").write_text("# A\nalpha", encoding="utf-8")
+    first = run_index(root, config)
+    assert first.parsed == 1 and first.flagged == [("a.md", "parse_failed")]
+    second = run_index(root, config)
+    assert second.parsed == 0 and second.unchanged == 1

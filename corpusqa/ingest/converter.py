@@ -331,8 +331,10 @@ def convert(
     """Converts one file to markdown in the parse cache.
 
     Writes ``<hash>.md`` and ``<hash>.meta.json`` into ``cache_dir`` on
-    success. Markdown is written even for ``zero_text`` files (whatever
-    little was extracted), but the flag is preserved so queries can warn.
+    success; a failed conversion writes only the meta (recording the
+    converter version, so the attempt is not repeated every run). Markdown
+    is written even for ``zero_text`` files (whatever little was
+    extracted), but the flag is preserved so queries can warn.
 
     Args:
         source: Absolute path of the source file.
@@ -372,6 +374,18 @@ def convert(
             STATUS_UNSUPPORTED
             if suffix == ".doc" and "soffice" in str(exc).lower()
             else STATUS_PARSE_FAILED
+        )
+        # Record the attempt, so the pipeline sees an up-to-date cache and
+        # leaves the file alone until it changes or the converter version
+        # moves on (a missing meta would read as stale and retry every run).
+        failure_meta = {
+            "file_hash": file_hash,
+            "source_name": source.name,
+            "error": f"{type(exc).__name__}: {exc}",
+            "converter_version": CONVERTER_VERSION,
+        }
+        (cache_dir / f"{file_hash}.meta.json").write_text(
+            json.dumps(failure_meta, indent=2), encoding="utf-8"
         )
         return ConversionResult(
             file_hash=file_hash,
