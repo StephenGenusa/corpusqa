@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import httpx
@@ -82,8 +83,15 @@ async def list_models(
     if kind == "openrouter":
         base = base or _OPENROUTER_BASE
     url = base
+    headers: dict[str, str] = {}
+    key = os.environ.get(provider.api_key_env) if provider.api_key_env else None
+    if key and kind in ("openai_compatible", "openrouter"):
+        # A keyed OpenAI-compatible server may refuse /models without it.
+        headers["Authorization"] = f"Bearer {key}"
     try:
-        async with httpx.AsyncClient(timeout=timeout_s, transport=transport) as http:
+        async with httpx.AsyncClient(
+            timeout=timeout_s, transport=transport, headers=headers
+        ) as http:
             if kind == "ollama":
                 url = f"{base}/api/tags"
                 body = await _get(http, url)

@@ -165,3 +165,51 @@ def test_dotenv_utf8_bom_does_not_corrupt_first_key(tmp_path: Path) -> None:
         assert os.environ["CQA_BOM1"] == "secret"
     finally:
         os.environ.pop("CQA_BOM1", None)
+
+
+def _auth_recorder(url: str, seen: list[str | None]) -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == url
+        seen.append(request.headers.get("authorization"))
+        return httpx.Response(200, json={"data": [{"id": "m"}]})
+
+    return httpx.MockTransport(handler)
+
+
+@pytest.mark.parametrize(
+    ("name", "base", "url", "prefix"),
+    [
+        (
+            "mybox",
+            "http://10.0.0.5:8000/v1",
+            "http://10.0.0.5:8000/v1/models",
+            "openai",
+        ),
+        ("openrouter", None, "https://openrouter.ai/api/v1/models", "openrouter"),
+    ],
+)
+def test_models_list_sends_the_provider_key(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    base: str | None,
+    url: str,
+    prefix: str,
+) -> None:
+    monkeypatch.setenv("CQA_LIST_KEY", "sk-test")
+    seen: list[str | None] = []
+    p = ProviderConfig(api_base=base, api_key_env="CQA_LIST_KEY")
+    listing = _list(name, p, _auth_recorder(url, seen))
+    assert [m.id for m in listing.models] == [f"{prefix}/m"]
+    assert seen == ["Bearer sk-test"]
+
+
+def test_models_list_without_a_key_sends_no_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CQA_LIST_KEY", raising=False)
+    seen: list[str | None] = []
+    url = "http://10.0.0.5:8000/v1/models"
+    for env in (None, "CQA_LIST_KEY"):  # no key configured; key var unset
+        p = ProviderConfig(api_base="http://10.0.0.5:8000/v1", api_key_env=env)
+        _list("mybox", p, _auth_recorder(url, seen))
+    assert seen == [None, None]
