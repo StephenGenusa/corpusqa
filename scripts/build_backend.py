@@ -138,13 +138,14 @@ def build(torch: str, unpinned: bool = False) -> Path:
     Returns:
         The backend executable.
     """
+    # First, so a missing uv stops the build before any venv or download.
+    constraints = _lock_constraints(unpinned)
     if not VENV_DIR.exists():
         print(f"creating {VENV_DIR}", flush=True)
         venv.EnvBuilder(with_pip=True, clear=False).create(VENV_DIR)
     python = _venv_python(VENV_DIR)
     pip = (python, "-m", "pip")
     _run(*pip, "install", "--upgrade", "pip")
-    constraints = _lock_constraints(unpinned)
     pinned: tuple[str | Path, ...] = ("-c", constraints) if constraints else ()
 
     installed = _installed_torch(python)

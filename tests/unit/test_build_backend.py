@@ -40,3 +40,21 @@ def test_missing_uv_fails_without_opt_out(monkeypatch: pytest.MonkeyPatch) -> No
     message = str(exc.value)
     assert "uv is required to pin to uv.lock" in message
     assert "--unpinned" in message
+
+
+def test_missing_uv_fails_before_venv_or_downloads(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_backend = _load()
+    calls: list[str] = []
+    monkeypatch.setattr(build_backend.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        build_backend.venv, "EnvBuilder", lambda *a, **k: calls.append("venv")
+    )
+    monkeypatch.setattr(
+        build_backend.subprocess, "run", lambda *a, **k: calls.append("run")
+    )
+    with pytest.raises(SystemExit) as exc:
+        build_backend.main([])
+    assert "uv is required" in str(exc.value)
+    assert calls == []
