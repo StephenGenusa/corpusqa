@@ -80,6 +80,48 @@ def test_explicit_kind_wins() -> None:
     assert provider_kind("x", cfg) == "lm_studio"
 
 
+@pytest.mark.parametrize(
+    "base",
+    [
+        "http://h:abc",
+        "http://h:99999",
+        "localhost:1234",
+        "ftp://h/v1",
+        "http://",
+        "http://:80/v1",
+    ],
+)
+def test_provider_rejects_malformed_api_base(base: str) -> None:
+    with pytest.raises(ValueError, match="api_base"):
+        ProviderConfig(api_base=base)
+
+
+@pytest.mark.parametrize(
+    "base",
+    ["http://localhost:1234/v1", "https://openrouter.ai/api/v1", "http://[::1]:8000"],
+)
+def test_provider_accepts_http_urls(base: str) -> None:
+    assert ProviderConfig(api_base=base).api_base == base
+
+
+def test_provider_kind_never_raises_on_a_bad_port() -> None:
+    # model_construct skips validation, as a hand-built object could.
+    bad = ProviderConfig.model_construct(kind=None, api_base="http://h:abc")
+    assert provider_kind("mybox", bad) == "openai_compatible"
+
+
+def test_config_save_reports_bad_api_base_as_a_field_error(tmp_path: Path) -> None:
+    from corpusqa.config.writer import save_config_changes
+
+    p = tmp_path / "corpusqa.yaml"
+    p.write_text(VALID.read_text(encoding="utf-8"), encoding="utf-8")
+    before = p.read_text(encoding="utf-8")
+    name = next(iter(load_config(VALID).providers))
+    with pytest.raises(ConfigError, match=rf"providers\.{name}\.api_base"):
+        save_config_changes(p, [(("providers", name, "api_base"), "http://h:abc")])
+    assert p.read_text(encoding="utf-8") == before
+
+
 def test_provider_still_rejects_unknown_keys() -> None:
     with pytest.raises(ValueError):
         ProviderConfig.model_validate({"kind": "ollama", "bogus": 1})

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from enum import StrEnum
 from typing import Literal
-from urllib.parse import urlparse
+from urllib.parse import ParseResult, urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class TaskName(StrEnum):
@@ -51,6 +51,34 @@ class ProviderConfig(_StrictModel):
     api_key_env: str | None = None
     max_concurrency: int = Field(default=4, ge=1, le=64)
 
+    @field_validator("api_base")
+    @classmethod
+    def _api_base_is_http_url(cls, value: str | None) -> str | None:
+        """Rejects an api_base that is not an http(s) URL with a valid port."""
+        if value is None:
+            return value
+        parsed = urlparse(value)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            raise ValueError(
+                "api_base must be an http:// or https:// URL with a host "
+                "(e.g. http://localhost:1234/v1)"
+            )
+        try:
+            parsed.port  # noqa: B018 -- property raises on a malformed port
+        except ValueError as exc:
+            raise ValueError(f"api_base has an invalid port: {exc}") from exc
+        return value
+
+
+def _port(parsed: ParseResult | None) -> int | None:
+    """Returns the URL's port, or None when absent or malformed."""
+    if parsed is None:
+        return None
+    try:
+        return parsed.port
+    except ValueError:
+        return None
+
 
 def provider_kind(name: str, provider: ProviderConfig) -> ProviderKind | None:
     """Returns the provider family: explicit ``kind``, else inferred.
@@ -67,7 +95,7 @@ def provider_kind(name: str, provider: ProviderConfig) -> ProviderKind | None:
     lowered = name.lower()
     parsed = urlparse(provider.api_base) if provider.api_base else None
     host = (parsed.hostname or "") if parsed else ""
-    port = parsed.port if parsed else None
+    port = _port(parsed)
     if port == 11434 or "ollama" in lowered:
         return "ollama"
     if port == 1234 or "lm_studio" in lowered or "lmstudio" in lowered:
