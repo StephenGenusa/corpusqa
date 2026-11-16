@@ -37,6 +37,19 @@ def test_delete_file_removes_row(tmp_path: Path) -> None:
         assert store.known_files() == {}
 
 
+def test_upsert_file_update_keeps_cards_and_evaluations(tmp_path: Path) -> None:
+    from corpusqa.catalog.summarizer import CatalogCard
+
+    with CatalogStore(tmp_path / "c.db") as store:
+        store.upsert_file(_row())
+        store.upsert_card("h1", CatalogCard(claims=["x"]), "m")
+        store.put_evaluation("r", "qh", "h1", "m", "{}")
+        store.upsert_file(_row(rel_path="b.md"))  # same hash: an update
+        assert store.known_files() == {"b.md": "h1"}
+        assert store.get_evaluation("qh", "h1", "m") == "{}"
+        assert store.files_needing_cards() == []
+
+
 def test_legacy_chunks_table_is_dropped(tmp_path: Path) -> None:
     import sqlite3
 

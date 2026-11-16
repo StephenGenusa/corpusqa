@@ -174,12 +174,27 @@ class CatalogStore:
         return {r["rel_path"]: r["file_hash"] for r in rows}
 
     def upsert_file(self, row: FileRow) -> None:
-        """Inserts or replaces one file row (commit per call)."""
+        """Inserts one file row, or updates it in place (commit per call).
+
+        An update never deletes the row: ``INSERT OR REPLACE`` would, and with
+        foreign keys on that cascades away the file's catalog card and every
+        cached verdict. Callers that want derived rows gone call
+        ``delete_file`` first.
+        """
         self._conn.execute(
-            """INSERT OR REPLACE INTO files
+            """INSERT INTO files
                (file_hash, rel_path, size_bytes, format, parsed_at,
                 parse_status, parse_error, md_cache_path, page_count)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(file_hash) DO UPDATE SET
+                 rel_path = excluded.rel_path,
+                 size_bytes = excluded.size_bytes,
+                 format = excluded.format,
+                 parsed_at = excluded.parsed_at,
+                 parse_status = excluded.parse_status,
+                 parse_error = excluded.parse_error,
+                 md_cache_path = excluded.md_cache_path,
+                 page_count = excluded.page_count""",
             (
                 row.file_hash,
                 row.rel_path,

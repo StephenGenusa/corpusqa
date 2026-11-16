@@ -129,16 +129,15 @@ def run_index(
                 )
             return converter_cache[0]
 
+        def is_forced(item: DiscoveredFile) -> bool:
+            return force_all or item.rel_path in forced
+
         def needs_conversion(item: DiscoveredFile) -> bool:
             if item.drift in (DriftKind.NEW, DriftKind.MODIFIED):
                 return True
             if item.drift is not DriftKind.UNCHANGED:
                 return False
-            return (
-                force_all
-                or item.rel_path in forced
-                or _cache_is_stale(cache_dir, item.file_hash)
-            )
+            return is_forced(item) or _cache_is_stale(cache_dir, item.file_hash)
 
         total = sum(1 for i in found if needs_conversion(i))
         done = 0
@@ -161,10 +160,16 @@ def run_index(
             else:  # NEW, MODIFIED, or forced
                 if item.drift is DriftKind.MODIFIED:
                     _delete(store, cache_dir, known[item.rel_path])
-                elif item.drift is DriftKind.UNCHANGED:
+                elif is_forced(item):
                     # Forced: the new conversion may differ under the same
                     # hash, so nothing derived from the old one may survive.
                     _delete(store, cache_dir, item.file_hash)
+                else:
+                    # Stale converter version: only the cache files are
+                    # replaced. Cards and cached verdicts (hours of model
+                    # compute) are kept; queries re-snap verdicts against
+                    # the new text without calling a model.
+                    _delete_cache_files(cache_dir, item.file_hash)
                 _convert_one(
                     store,
                     cache_dir,
@@ -197,8 +202,13 @@ def _cache_is_stale(cache_dir: Path, file_hash: str) -> bool:
 
 
 def _delete(store: CatalogStore, cache_dir: Path, file_hash: str) -> None:
-    """Removes a file's rows and cache artifacts."""
+    """Removes a file's rows (cards and verdicts cascade) and cache artifacts."""
     store.delete_file(file_hash)
+    _delete_cache_files(cache_dir, file_hash)
+
+
+def _delete_cache_files(cache_dir: Path, file_hash: str) -> None:
+    """Removes a file's cache artifacts, leaving its catalog rows alone."""
     # .chunks.jsonl: left behind by indexes built before chunking was removed.
     for suffix in (".md", ".meta.json", ".chunks.jsonl", ".pages.json"):
         (cache_dir / f"{file_hash}{suffix}").unlink(missing_ok=True)
