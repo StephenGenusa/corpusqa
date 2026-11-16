@@ -239,6 +239,9 @@ function setRunning(running) {
 }
 
 async function startRun() {
+  // Enter can arrive while a start is still saving the model selection;
+  // a second start would be refused by the backend and must not run.
+  if (state.running || els.run.disabled) return;
   const folder = els.folder.value.trim();
   const question = els.question.value.trim();
   if (!folder) {
@@ -259,7 +262,9 @@ async function startRun() {
     hideError();
     clear(els.notices);
     results.reset();
-    if (state.runFolder !== folder) reader.clearCache();
+    // Files may have changed since the last run (it reconverts them), so
+    // text cached by the reader is dropped at every start.
+    reader.clearCache();
     state.runFolder = folder;
     const definition = els.definition.value.trim();
     state.startedAt = Date.now();
@@ -271,9 +276,13 @@ async function startRun() {
     try {
       await call('run.start', { folder, question, definition: definition || null, ...drawer.queryOptions() });
     } catch (e) {
-      setRunning(false);
-      state.startedAt = 0;
-      setStatus('Not started');
+      // "already in progress": the backend is running an earlier start, so
+      // the running state (and its Cancel button) stays.
+      if (!/already in progress/.test(e.message)) {
+        setRunning(false);
+        state.startedAt = 0;
+        setStatus('Not started');
+      }
       showError(e.message);
     }
   } finally {
