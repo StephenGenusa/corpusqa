@@ -71,6 +71,10 @@ ipcMain.handle('backend', async (_e, cmd, params) => {
   }
 });
 
+// The backend may exit before the window has subscribed to events (e.g. no
+// Python on PATH); the renderer asks for this to recover the stderr tail.
+ipcMain.handle('backend-status', () => backend.status());
+
 ipcMain.handle('backend-restart', async () => {
   await backend.stop();
   backend.start();

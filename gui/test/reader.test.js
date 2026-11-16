@@ -172,3 +172,41 @@ test('matchCitation prefers heading and page, then falls back to the file', () =
   assert.equal(matchCitation(cite(null, null, 'b.md'), rows), 3);
   assert.equal(matchCitation(cite(null, null, 'c.md'), rows), -1);
 });
+
+// --- code-point offsets (Python) -> UTF-16 indices (JS) ---
+const { codePointMapper, mapDocOffsets } = require('../src/reader');
+
+test('codePointMapper is the identity for text without astral characters', () => {
+  const toUnit = codePointMapper('plain text, café — ünïcode');
+  assert.equal(toUnit(0), 0);
+  assert.equal(toUnit(7), 7);
+  assert.equal(toUnit(null), null);
+});
+
+test('codePointMapper shifts offsets after each astral character', () => {
+  const text = '😀 intro\n\nThe quote here.';
+  const toUnit = codePointMapper(text);
+  // Python: text.index("The") == 9 (code points); the JS index is 10.
+  assert.equal(toUnit(9), 10);
+  assert.equal(text.slice(toUnit(9), toUnit(9 + 15)), 'The quote here.');
+  assert.equal(toUnit(0), 0); // before the emoji
+  assert.equal(toUnit(1), 2); // just after it
+});
+
+test('codePointMapper counts several astral characters, including adjacent ones', () => {
+  const text = 'a𝔄b😀😀c𠀀d';
+  const toUnit = codePointMapper(text);
+  const cps = [...text]; // Python-style code points
+  for (let cp = 0; cp <= cps.length; cp++) {
+    assert.equal(text.slice(0, toUnit(cp)), cps.slice(0, cp).join(''), `cp ${cp}`);
+  }
+});
+
+test('mapDocOffsets converts page_map offsets and keeps a mapper', () => {
+  const text = '😀😀 p1\n\np2';
+  // Code points: 😀 0, 😀 1, ' ' 2, p 3, 1 4, \n 5, \n 6, p 7.
+  const doc = mapDocOffsets({ markdown: text, page_map: [[0, '1'], [7, '2']] });
+  assert.deepEqual(doc.page_map, [[0, '1'], [9, '2']]);
+  assert.equal(text.slice(9), 'p2');
+  assert.equal(doc.toUnit(7), 9);
+});

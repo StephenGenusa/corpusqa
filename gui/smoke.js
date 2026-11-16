@@ -55,6 +55,8 @@ async function run(win, quit) {
       model: document.getElementById('model').value,
       mixed: !document.getElementById('mixed').hidden,
       errorPanel: document.getElementById('error-panel').hidden ? null : document.getElementById('error-message').textContent,
+      errorTail: document.getElementById('error-tail').textContent,
+      restartShown: !document.getElementById('restart').hidden,
     })`);
     await shot('0-ready');
 

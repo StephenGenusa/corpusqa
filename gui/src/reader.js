@@ -271,8 +271,60 @@
     return best;
   }
 
+  /**
+   * Maps Python code-point offsets to JavaScript UTF-16 indices for `text`.
+   *
+   * Each astral-plane character (emoji, CJK Ext-B, math letters) is one code
+   * point but two UTF-16 units, so every one before an offset shifts it by one.
+   * @param {string} text
+   * @returns {(cp: number|null) => number|null}
+   */
+  function codePointMapper(text) {
+    if (!/[\uD800-\uDFFF]/.test(text)) return (cp) => cp;
+    const astral = []; // code-point positions of astral characters, ascending
+    let cp = 0;
+    for (let i = 0; i < text.length; i++, cp++) {
+      const c = text.charCodeAt(i);
+      if (c >= 0xd800 && c <= 0xdbff && i + 1 < text.length) {
+        const d = text.charCodeAt(i + 1);
+        if (d >= 0xdc00 && d <= 0xdfff) {
+          astral.push(cp);
+          i++;
+        }
+      }
+    }
+    return (offset) => {
+      if (offset === null || offset === undefined) return offset;
+      let lo = 0;
+      let hi = astral.length; // count of astral positions < offset
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (astral[mid] < offset) lo = mid + 1;
+        else hi = mid;
+      }
+      return offset + lo;
+    };
+  }
+
+  /**
+   * Converts a `doc.get` reply's page_map to UTF-16 indices and attaches the
+   * mapper (`toUnit`) for converting finding offsets.
+   * @param {{markdown: string, page_map: Array<[number, string]>}} doc
+   * @returns {{markdown: string, page_map: Array<[number, string]>, toUnit: Function}}
+   */
+  function mapDocOffsets(doc) {
+    const toUnit = codePointMapper(doc.markdown);
+    return {
+      markdown: doc.markdown,
+      page_map: (doc.page_map || []).map(([off, label]) => [toUnit(off), label]),
+      toUnit,
+    };
+  }
+
   return {
     NOT_LOCATED,
+    codePointMapper,
+    mapDocOffsets,
     readerTarget,
     pageLabelAt,
     windowAround,

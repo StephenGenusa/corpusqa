@@ -148,7 +148,15 @@ async function loadConfig() {
     drawer.setConfig(config);
     return true;
   } catch (e) {
-    showError(`The configuration could not be loaded: ${e.message}`);
+    const status = await window.corpusqa.backendStatus();
+    if (!status.running) {
+      // It may have exited before this window subscribed to its events.
+      const exit = status.lastExit;
+      showError(`The backend is not running (exit code ${exit?.code ?? 'none'}).`,
+        exit ? exit.stderrTail : null, true);
+    } else {
+      showError(`The configuration could not be loaded: ${e.message}`);
+    }
     return false;
   }
 }

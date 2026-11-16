@@ -354,6 +354,25 @@ class _SlowClient(FakeClient):
         return await super().complete(task, messages, **kw)
 
 
+class _GatedClient(FakeClient):
+    """Completes the first call; every later call waits until it is cancelled.
+
+    The fake ignores ``max_concurrency``, so with a plain delay all calls can
+    finish before the test's cancel arrives. Gating makes the run still be in
+    progress, deterministically, when the cancel is sent.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._started = 0
+
+    async def complete(self, task: TaskName, messages: Any, **kw: Any) -> Any:
+        self._started += 1
+        if self._started > 1:
+            await asyncio.Event().wait()  # never set: only cancellation ends it
+        return await super().complete(task, messages, **kw)
+
+
 def test_cancel_stops_and_reports(
     tmp_path: Path, fake_convert: None, harness: Callable[..., Harness]
 ) -> None:
@@ -373,7 +392,7 @@ def test_cancel_stops_and_reports(
         ),
         encoding="utf-8",
     )
-    fake = _SlowClient({TaskName.EXTRACT: [_extraction()] * 6})
+    fake = _GatedClient({TaskName.EXTRACT: [_extraction()] * 6})
     h = harness(cfg, client=fake)
     h.send(_start(root))
     h.event("file_result")  # the query is under way

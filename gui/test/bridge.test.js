@@ -121,6 +121,35 @@ test('bridge can be restarted after an exit', async () => {
   await backend.stop();
 });
 
+test('status keeps the last exit for a subscriber that arrives late', async () => {
+  // Exits immediately, before anything listens (like a window still loading).
+  const backend = new Backend({
+    cmd: NODE,
+    args: ['-e', "console.error('ImportError: no module named corpusqa'); process.exit(1)"],
+  });
+  assert.deepEqual(backend.status(), { running: false, lastExit: null });
+  backend.start();
+  assert.equal(backend.status().running, true);
+  await new Promise((r) => setTimeout(r, 1500)); // no 'exit' listener attached
+  const st = backend.status();
+  assert.equal(st.running, false);
+  assert.equal(st.lastExit.code, 1);
+  assert.ok(st.lastExit.stderrTail.some((l) => l.includes('ImportError')));
+  backend.start(); // a restart clears it
+  assert.equal(backend.status().lastExit, null);
+  await backend.stop();
+});
+
+test('status records a command that cannot start', async () => {
+  const backend = new Backend({ cmd: '/nonexistent/python', args: [] });
+  backend.start();
+  await new Promise((r) => setTimeout(r, 300));
+  const st = backend.status();
+  assert.equal(st.running, false);
+  assert.equal(st.lastExit.code, null);
+  assert.ok(st.lastExit.stderrTail.join('\n').includes('ENOENT'));
+});
+
 // --- resolveBackend (dev branch) ---
 
 const linuxRepo = '/home/u/corpus_qa';

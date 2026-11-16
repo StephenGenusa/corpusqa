@@ -80,12 +80,23 @@ class Backend extends EventEmitter {
     this.pending = new Map();
     this.nextId = 1;
     this.stderrTail = [];
+    this.lastExit = null;
+  }
+
+  /**
+   * Whether the backend runs, and how it last exited. Lets a window that
+   * loads after a fast startup failure still show the stderr tail.
+   * @returns {{running: boolean, lastExit: object|null}}
+   */
+  status() {
+    return { running: this.running, lastExit: this.lastExit };
   }
 
   /** Spawns the backend unless it is already running. */
   start() {
     if (this.running) return;
     this.stderrTail = [];
+    this.lastExit = null;
     this.running = true;
     const posix = process.platform !== 'win32';
     const child = spawn(this.cmd, this.args, {
@@ -104,14 +115,18 @@ class Backend extends EventEmitter {
       finished = true;
       clearTimeout(closeTimer);
       stderrFeed.flush();
+      const info = { code, signal: signal || null, stderrTail: [...this.stderrTail] };
+      // A late exit of a child already replaced by a restart must not mark
+      // the new one as stopped.
       if (this.child === child) {
         this.child = null;
         this.running = false;
+        this.lastExit = info;
       }
       const reason = `backend exited (code ${code === null ? 'none' : code})`;
       for (const { reject } of this.pending.values()) reject(new Error(reason));
       this.pending.clear();
-      this.emit('exit', { code, signal: signal || null, stderrTail: [...this.stderrTail] });
+      this.emit('exit', info);
     };
 
     child.stdout.setEncoding('utf8');

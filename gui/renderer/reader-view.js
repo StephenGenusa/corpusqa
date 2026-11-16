@@ -3,8 +3,9 @@
 
 import { h, clear, call } from './dom.js';
 
-const { readerTarget, pageLabelAt, windowAround, extendBefore, extendAfter, buildBlocks } =
-  window.CorpusReader;
+const {
+  readerTarget, pageLabelAt, windowAround, extendBefore, extendAfter, buildBlocks, mapDocOffsets,
+} = window.CorpusReader;
 
 const RADIUS = 20000;
 const EDGE_PX = 2000;
@@ -18,7 +19,9 @@ export class ReaderView {
   constructor(els, getFolder) {
     this.els = els;
     this.getFolder = getFolder;
-    this.cache = new Map(); // `${folder}\0${rel}` -> {markdown, page_map}
+    // `${folder}\0${rel}` -> {markdown, page_map, toUnit}; page_map already in
+    // UTF-16 indices, toUnit maps the backend's code-point offsets.
+    this.cache = new Map();
     this.view = null; // {text, pageMap, start, end, highlight}
     this.token = 0;
     this.extending = false;
@@ -37,7 +40,7 @@ export class ReaderView {
       this.cache.set(key, doc);
       return doc;
     }
-    const doc = await call('doc.get', { folder, rel_path: relPath });
+    const doc = mapDocOffsets(await call('doc.get', { folder, rel_path: relPath }));
     this.cache.set(key, doc);
     while (this.cache.size > CACHE_DOCS) this.cache.delete(this.cache.keys().next().value);
     return doc;
@@ -65,12 +68,16 @@ export class ReaderView {
     if (token !== this.token) return;
     const text = doc.markdown;
     const pageMap = doc.page_map || [];
+    // Finding offsets are Python code-point indices; convert to UTF-16.
     const target = readerTarget(row);
+    if (target.offset !== null) target.offset = doc.toUnit(target.offset);
     if (target.notice) {
       els.notice.textContent = `${target.notice}. Showing the start of the document; the quote may be paraphrased.`;
       els.notice.hidden = false;
     }
-    const highlight = target.offset === null ? null : [row.start, row.end ?? row.start];
+    const highlight = target.offset === null
+      ? null
+      : [target.offset, doc.toUnit(row.end ?? row.start)];
     const { start, end } = windowAround(text, target.offset, RADIUS);
     this.view = { text, pageMap, start, end, highlight };
     if (!row.page_label && target.offset !== null) {
