@@ -3,7 +3,7 @@
 Creates an isolated venv at ``build/backend-venv`` (so a CUDA torch in the
 development venv never leaks into the bundle), installs PyTorch from the
 matching PyTorch wheel index, installs corpusqa with its ``build`` extra
-(pinned to the versions in ``uv.lock`` when ``uv`` is available), then runs
+(pinned to the versions in ``uv.lock``; needs ``uv``), then runs
 PyInstaller with ``packaging/backend.spec``.
 
 Output: ``dist/corpusqa-backend/corpusqa-backend[.exe]`` (onedir). Run it on
@@ -11,7 +11,7 @@ each target OS; PyInstaller does not cross-compile.
 
 Usage::
 
-    python scripts/build_backend.py [--torch cpu|cuda]
+    python scripts/build_backend.py [--torch cpu|cuda] [--unpinned]
 """
 
 from __future__ import annotations
@@ -63,20 +63,50 @@ def _installed_torch(python: Path) -> str | None:
     return proc.stdout.strip() if proc.returncode == 0 else None
 
 
-def _lock_constraints() -> Path | None:
+def pin_mode(uv_available: bool, unpinned: bool) -> str:
+    """Decides how dependency versions are chosen for the build.
+
+    Args:
+        uv_available: Whether ``uv`` is on PATH.
+        unpinned: The ``--unpinned`` opt-out was given.
+
+    Returns:
+        ``pinned`` (constrain to ``uv.lock``), ``unpinned`` (newest from
+        PyPI, explicitly requested) or ``fail`` (uv missing, no opt-out).
+    """
+    if unpinned:
+        return "unpinned"
+    return "pinned" if uv_available else "fail"
+
+
+def _lock_constraints(unpinned: bool) -> Path | None:
     """Writes ``uv.lock``'s pins as a pip constraints file.
 
     The bundle then ships the dependency versions the test suite ran with
     rather than whatever is newest on PyPI. Constraints only limit versions;
     they never add packages (e.g. CUDA wheels a CPU torch does not need).
 
+    Args:
+        unpinned: Skip pinning and install the newest versions.
+
     Returns:
-        The constraints file, or None when ``uv`` is not installed.
+        The constraints file, or None for an explicitly unpinned build.
+
+    Raises:
+        SystemExit: ``uv`` is not installed and ``unpinned`` is False.
     """
     uv = shutil.which("uv")
-    if uv is None:
+    mode = pin_mode(uv is not None, unpinned)
+    if mode == "fail":
+        raise SystemExit(
+            "error: uv is required to pin to uv.lock (the tested dependency "
+            "versions). Install it (https://docs.astral.sh/uv/getting-started/"
+            "installation/, e.g. `pip install uv`) or pass --unpinned to build "
+            "with the newest, untested versions."
+        )
+    if mode == "unpinned" or uv is None:
         print(
-            "warning: uv not found; installing unpinned (newest) dependencies",
+            "warning: --unpinned: installing the newest (untested) dependencies",
             file=sys.stderr,
         )
         return None
@@ -98,11 +128,12 @@ def _lock_constraints() -> Path | None:
     return out
 
 
-def build(torch: str) -> Path:
+def build(torch: str, unpinned: bool = False) -> Path:
     """Prepares the build venv and runs PyInstaller.
 
     Args:
         torch: ``cpu`` or ``cuda`` PyTorch wheels.
+        unpinned: Install the newest dependencies instead of ``uv.lock``'s.
 
     Returns:
         The backend executable.
@@ -113,7 +144,7 @@ def build(torch: str) -> Path:
     python = _venv_python(VENV_DIR)
     pip = (python, "-m", "pip")
     _run(*pip, "install", "--upgrade", "pip")
-    constraints = _lock_constraints()
+    constraints = _lock_constraints(unpinned)
     pinned: tuple[str | Path, ...] = ("-c", constraints) if constraints else ()
 
     installed = _installed_torch(python)
@@ -173,9 +204,14 @@ def main(argv: list[str] | None = None) -> int:
         default="cpu",
         help="PyTorch variant to bundle (default: cpu; cuda is ~3x larger)",
     )
+    parser.add_argument(
+        "--unpinned",
+        action="store_true",
+        help="do not pin to uv.lock (newest, untested versions; no uv needed)",
+    )
     args = parser.parse_args(argv)
     started = time.monotonic()
-    exe = build(args.torch)
+    exe = build(args.torch, args.unpinned)
     minutes = (time.monotonic() - started) / 60
     size_gb = _dir_size(DIST_DIR) / 1e9
     print(f"built {exe}")

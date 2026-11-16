@@ -11,6 +11,7 @@ commands.
 ## Requirements
 
 - Python 3.11 (with `venv` and `pip`) to run the build script
+- [uv](https://docs.astral.sh/uv/), used to pin dependencies to `uv.lock`
 - Node.js 20+ and npm
 - Roughly 10 GB of free disk for the build venv, PyInstaller work files and
   installers; network access for the PyTorch, PyPI and electron-builder
@@ -26,9 +27,10 @@ cd gui && npm install && npm run dist
 `build_backend.py` creates an isolated venv at `build/backend-venv`,
 installs PyTorch from the PyTorch wheel index (CPU wheels by default), then
 `pip install .[build]`, then runs PyInstaller with `packaging/backend.spec`.
-When `uv` is installed, every dependency is pinned to the version in
-`uv.lock` (the versions the test suite runs with); without it pip installs
-the newest versions and prints a warning.
+Every dependency is pinned to the version in `uv.lock` (the versions the
+test suite runs with), which needs [uv](https://docs.astral.sh/uv/) on PATH
+(`pip install uv`); without it the build stops with an error. To build with
+the newest, untested versions instead, pass `--unpinned`.
 The result is `dist/corpusqa-backend/corpusqa-backend` (`.exe` on Windows);
 the script prints its size and build time. Rerunning reuses the venv.
 
