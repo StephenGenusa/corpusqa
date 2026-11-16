@@ -391,7 +391,13 @@ def convert(
     md_path = cache_dir / f"{file_hash}.md"
     md_path.write_text(markdown, encoding="utf-8")
     if suffix == ".docx":
-        page_map = build_docx_page_map(source, markdown)
+        try:
+            page_map = build_docx_page_map(source, markdown)
+        except Exception as exc:  # noqa: BLE001 -- e.g. a corrupt archive
+            # Docling already reported the file; a page map failure must not
+            # escape convert() and abort the whole batch.
+            _log.warning("%s: page numbers unavailable (%s)", source.name, exc)
+            page_map = []
     else:
         page_map = _build_page_map(document, markdown)
     if page_map:

@@ -110,6 +110,11 @@ def _build_parser() -> argparse.ArgumentParser:
     p_est.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
     p_est.add_argument("--yes", action="store_true")
 
+    p_gui = sub.add_parser(
+        "gui-backend", help="stdio JSON-lines backend for the desktop GUI"
+    )
+    p_gui.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
+
     return parser
 
 
@@ -123,6 +128,10 @@ def main(argv: list[str] | None = None) -> int:
         Process exit code.
     """
     args = _build_parser().parse_args(argv)
+    if args.command == "gui-backend":
+        from corpusqa.gui_backend.server import run_backend
+
+        return run_backend(args.config, args.verbose)
     log_dir = None
     if args.command in ("index", "query", "estimate"):
         log_dir = index_paths(args.directory.resolve())[0] / "logs"
