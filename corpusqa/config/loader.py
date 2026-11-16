@@ -38,10 +38,21 @@ def load_config(path: Path) -> AppConfig:
     try:
         return AppConfig.model_validate(data)
     except ValidationError as exc:
-        lines = [
-            f"  {'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
-            for err in exc.errors()
-        ]
-        raise ConfigError(
-            f"invalid configuration in {path}:\n" + "\n".join(lines)
-        ) from exc
+        raise ConfigError(format_validation_error(exc, path)) from exc
+
+
+def format_validation_error(exc: ValidationError, path: Path) -> str:
+    """Formats a Pydantic error as one `dotted.path: msg` line per problem.
+
+    Args:
+        exc: The validation error.
+        path: The config file the data came from.
+
+    Returns:
+        A multi-line message listing every invalid field.
+    """
+    lines = [
+        f"  {'.'.join(str(p) for p in err['loc'])}: {err['msg']}"
+        for err in exc.errors()
+    ]
+    return f"invalid configuration in {path}:\n" + "\n".join(lines)
