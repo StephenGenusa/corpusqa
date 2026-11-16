@@ -30,8 +30,11 @@ _ANCHOR_LENGTHS = (80, 40, 20)
 # Docling joins, splits and re-spaces paragraphs and dashes differently from
 # the XML, so matching ignores spaces and table pipes altogether (lengths above
 # are counted in those characters). The shortest prefixes recur in a volume, so they are
-# trusted only near the cursor: a page is a few thousand characters.
+# trusted only near the cursor: a page is a few thousand characters. Even the
+# long prefixes are bounded: boilerplate (ad blocks) recurs every issue, and one
+# false far-ahead match would push the cursor past every true mark in between.
 _SHORT_ANCHOR_WINDOW = 30_000
+_LONG_ANCHOR_WINDOW = 100_000
 
 
 def docx_page_marks(source: Path) -> list[tuple[str, str]]:
@@ -93,12 +96,14 @@ def build_docx_page_map(source: Path, markdown: str) -> PageMap:
     normalized, index_map = _compact(markdown)
     page_map: PageMap = [(0, "1")]
     cursor = 0  # position in normalized space
-    unplaced = 0
+    unplaced: list[str] = []
+    max_jump = 0
     for label, text in marks:
         pos = _locate(text, normalized, cursor)
         if pos < 0:
-            unplaced += 1
+            unplaced.append(label)
             continue
+        max_jump = max(max_jump, pos - cursor)
         cursor = pos
         offset = index_map[pos]
         if offset < page_map[-1][0]:
@@ -106,11 +111,15 @@ def build_docx_page_map(source: Path, markdown: str) -> PageMap:
         page_map.append((offset, label))
     if unplaced:
         _log.warning(
-            "%s: %d of %d page bookmarks could not be placed in the markdown",
+            "%s: %d of %d page bookmarks could not be placed in the markdown "
+            "(largest cursor jump %d chars; unplaced: %s)",
             source.name,
-            unplaced,
+            len(unplaced),
             len(marks),
+            max_jump,
+            ", ".join(unplaced[:40]) + (" ..." if len(unplaced) > 40 else ""),
         )
+    _log.debug("%s: largest page-anchor cursor jump %d chars", source.name, max_jump)
     return page_map
 
 
@@ -128,7 +137,7 @@ def _locate(text: str, compact: str, cursor: int) -> int:
         return -1
     for n in _ANCHOR_LENGTHS:
         short = n == _ANCHOR_LENGTHS[-1]
-        end = cursor + _SHORT_ANCHOR_WINDOW if short else len(compact)
+        end = cursor + (_SHORT_ANCHOR_WINDOW if short else _LONG_ANCHOR_WINDOW)
         pos = compact.find(anchor[:n], cursor, end)
         if pos >= 0:
             return pos

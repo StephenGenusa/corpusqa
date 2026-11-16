@@ -113,3 +113,30 @@ def test_anchoring_ignores_spacing_and_table_pipes(tmp_path: Path) -> None:
     pm = build_docx_page_map(src, md)
     assert [label for _, label in pm] == ["1", "2"]
     assert md[pm[1][0] :].startswith("Books")
+
+
+def test_far_ahead_boilerplate_match_does_not_derail_later_marks(
+    tmp_path: Path,
+) -> None:
+    boiler = "Books in Supply carriage included nett price list for all readers, " * 2
+    src = make_docx(
+        tmp_path,
+        [
+            "intro",
+            "BM:vp_10_2",
+            boiler,
+            "BM:vp_10_3",
+            "third page text is right here in the markdown",
+            "BM:vp_10_4",
+            "fourth page text is also right here in the markdown",
+        ],
+    )
+    filler = "lorem ipsum dolor " * 9000  # well past any anchor window
+    md = (
+        "intro\n\nthird page text is right here in the markdown\n\n"
+        "fourth page text is also right here in the markdown\n\n"
+        f"{filler}\n\n{boiler}"
+    )
+    pm = build_docx_page_map(src, md)
+    assert [label for _, label in pm] == ["1", "3", "4"]
+    assert md[pm[1][0] :].startswith("third page")
