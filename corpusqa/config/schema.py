@@ -8,6 +8,8 @@ variable name, never stored in configuration.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -31,6 +33,9 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+ProviderKind = Literal["ollama", "lm_studio", "openrouter", "openai_compatible"]
+
+
 class ProviderConfig(_StrictModel):
     """A named provider endpoint.
 
@@ -38,11 +43,40 @@ class ProviderConfig(_StrictModel):
         api_base: Override base URL (e.g. local Ollama endpoint).
         api_key_env: Name of the environment variable holding the API key.
         max_concurrency: Semaphore size for fan-out calls to this provider.
+        kind: Provider family; when unset it is inferred by ``provider_kind``.
     """
 
+    kind: ProviderKind | None = None
     api_base: str | None = None
     api_key_env: str | None = None
     max_concurrency: int = Field(default=4, ge=1, le=64)
+
+
+def provider_kind(name: str, provider: ProviderConfig) -> ProviderKind | None:
+    """Returns the provider family: explicit ``kind``, else inferred.
+
+    Args:
+        name: Provider key in ``providers``.
+        provider: Its configuration.
+
+    Returns:
+        The kind, or None when nothing identifies it (free-text models only).
+    """
+    if provider.kind is not None:
+        return provider.kind
+    lowered = name.lower()
+    parsed = urlparse(provider.api_base) if provider.api_base else None
+    host = (parsed.hostname or "") if parsed else ""
+    port = parsed.port if parsed else None
+    if port == 11434 or "ollama" in lowered:
+        return "ollama"
+    if port == 1234 or "lm_studio" in lowered or "lmstudio" in lowered:
+        return "lm_studio"
+    if lowered == "openrouter" or host == "openrouter.ai":
+        return "openrouter"
+    if provider.api_base:
+        return "openai_compatible"
+    return None
 
 
 class TaskConfig(_StrictModel):

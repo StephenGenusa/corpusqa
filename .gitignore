@@ -29,3 +29,6 @@ docs/
 
 # Local-only material: private corpora, probe scripts, working notes
 local/
+
+# Secrets
+.env

@@ -6,6 +6,10 @@ providers:
   ollama_local:
     api_base: "http://localhost:11434"
     max_concurrency: 2
+  lm_studio:
+    kind: lm_studio
+    api_base: "http://localhost:1234/v1"
+    max_concurrency: 1
   openrouter:
     api_key_env: OPENROUTER_API_KEY
     max_concurrency: 8
@@ -34,6 +38,10 @@ tasks:
     cost_per_mtok_in: 0.0
     cost_per_mtok_out: 0.0
     fallbacks: ["openrouter/deepseek/deepseek-chat"]
+    # To run extract on LM Studio instead (load the model with a context at
+    # least as large as context_window; LM Studio fixes it at load time):
+    # model: "lm_studio/<model-id>"
+    # provider: lm_studio
   synthesize:
     model: "openrouter/anthropic/claude-sonnet-4.5"
     provider: openrouter

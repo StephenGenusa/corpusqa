@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 from corpusqa.config import load_config
+from corpusqa.config.schema import ProviderConfig, TaskName, provider_kind
 from corpusqa.errors import ConfigError
+from corpusqa.llm.tasks import LLMTaskClient
 
 VALID = Path(__file__).resolve().parents[2] / "corpusqa.example.yaml"
 
@@ -52,3 +54,80 @@ def test_missing_file_is_config_error(tmp_path: Path) -> None:
     """A nonexistent path raises ConfigError, not OSError."""
     with pytest.raises(ConfigError, match="cannot read"):
         load_config(tmp_path / "absent.yaml")
+
+
+@pytest.mark.parametrize(
+    ("name", "base", "kind"),
+    [
+        ("ollama_local", "http://localhost:11434", "ollama"),
+        ("lm_studio", "http://localhost:1234/v1", "lm_studio"),
+        ("lmstudio", None, "lm_studio"),
+        ("openrouter", None, "openrouter"),
+        ("x", "https://openrouter.ai/api/v1", "openrouter"),
+        ("mybox", "http://10.0.0.5:8000/v1", "openai_compatible"),
+    ],
+)
+def test_provider_kind_inferred(name: str, base: str | None, kind: str) -> None:
+    assert provider_kind(name, ProviderConfig(api_base=base)) == kind
+
+
+def test_provider_kind_none_without_hints() -> None:
+    assert provider_kind("custom", ProviderConfig()) is None
+
+
+def test_explicit_kind_wins() -> None:
+    cfg = ProviderConfig(kind="lm_studio", api_base="http://h:9/v1")
+    assert provider_kind("x", cfg) == "lm_studio"
+
+
+def test_provider_still_rejects_unknown_keys() -> None:
+    with pytest.raises(ValueError):
+        ProviderConfig.model_validate({"kind": "ollama", "bogus": 1})
+
+
+def test_lm_studio_call_kwargs_have_placeholder_key_and_no_num_ctx() -> None:
+    cfg = load_config(VALID)
+    cfg.providers["lm_studio"] = ProviderConfig(
+        kind="lm_studio", api_base="http://localhost:1234/v1"
+    )
+    task = cfg.tasks[TaskName.EXTRACT].model_copy(
+        update={"model": "lm_studio/qwen@q4", "provider": "lm_studio"}
+    )
+    cfg.tasks[TaskName.EXTRACT] = task
+    kw = LLMTaskClient(cfg)._call_kwargs(task)
+    assert kw["api_key"] == "lm-studio"
+    assert "num_ctx" not in kw
+    assert kw["api_base"] == "http://localhost:1234/v1"
+
+
+def test_lm_studio_complete_drops_json_object_response_format(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+    from typing import Any
+
+    from corpusqa.llm import tasks as llm_tasks
+    from tests.unit.test_pricing import _fake_response
+
+    cfg = load_config(VALID)
+    cfg.providers["lm_studio"] = ProviderConfig(
+        kind="lm_studio", api_base="http://localhost:1234/v1"
+    )
+    cfg.tasks[TaskName.EXTRACT] = cfg.tasks[TaskName.EXTRACT].model_copy(
+        update={"model": "lm_studio/qwen@q4", "provider": "lm_studio"}
+    )
+    sent: dict[str, Any] = {}
+
+    async def fake_acompletion(**kwargs: Any) -> Any:  # noqa: ANN401
+        sent.update(kwargs)
+        return _fake_response(kwargs["model"])
+
+    monkeypatch.setattr(llm_tasks.litellm, "acompletion", fake_acompletion)
+    asyncio.run(
+        LLMTaskClient(cfg).complete(
+            TaskName.EXTRACT,
+            [{"role": "user", "content": "x"}],
+            response_format={"type": "json_object"},
+        )
+    )
+    assert "response_format" not in sent

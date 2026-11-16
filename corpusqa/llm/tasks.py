@@ -23,6 +23,8 @@ from corpusqa.errors import LLMError
 from corpusqa.llm.pricing import cost_map_rate, task_rate
 
 _NUM_RETRIES = 3
+_LM_STUDIO_PREFIX = "lm_studio/"
+_LM_STUDIO_PLACEHOLDER_KEY = "lm-studio"
 _OLLAMA_PREFIXES = ("ollama/", "ollama_chat/")
 _log = logging.getLogger("corpusqa.llm")
 
@@ -126,6 +128,11 @@ class LLMTaskClient:
                     f"(required by provider '{task_cfg.provider}')"
                 )
             kwargs["api_key"] = key
+        elif task_cfg.model.startswith(_LM_STUDIO_PREFIX):
+            # LM Studio ignores the key but LiteLLM's OpenAI-compatible path
+            # requires one. Its context length is fixed at model load time,
+            # so no num_ctx is sent.
+            kwargs["api_key"] = _LM_STUDIO_PLACEHOLDER_KEY
         return kwargs
 
     def _cost(
@@ -183,6 +190,13 @@ class LLMTaskClient:
             messages=messages,
         )
         kwargs.update(overrides)
+        if task_cfg.model.startswith(_LM_STUDIO_PREFIX):
+            # LM Studio accepts only json_schema/text response formats and
+            # rejects json_object with a 400; the schema-in-prompt path
+            # (structured.py) still steers it to JSON.
+            fmt = kwargs.get("response_format")
+            if isinstance(fmt, dict) and fmt.get("type") == "json_object":
+                del kwargs["response_format"]
         # The semaphore bounds the PRIMARY provider's concurrency. When a
         # call falls back to a model on a different provider, LiteLLM runs
         # the fallback inside this same acompletion under the primary's
