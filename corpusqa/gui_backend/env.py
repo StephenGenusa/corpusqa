@@ -27,7 +27,7 @@ def load_dotenv(path: Path) -> list[str]:
         Names of the variables that were set (already-set ones are kept).
     """
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
         return []
     set_names: list[str] = []

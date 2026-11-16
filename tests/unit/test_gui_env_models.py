@@ -155,3 +155,13 @@ def test_list_models_unreachable_returns_error() -> None:
     listing = _list("ollama_local", p, httpx.MockTransport(handler))
     assert listing.models == []
     assert listing.error is not None and "unreachable" in listing.error
+
+
+def test_dotenv_utf8_bom_does_not_corrupt_first_key(tmp_path: Path) -> None:
+    os.environ.pop("CQA_BOM1", None)
+    (tmp_path / ".env").write_bytes(b"\xef\xbb\xbfCQA_BOM1=secret\n")
+    try:
+        assert load_dotenv(tmp_path / ".env") == ["CQA_BOM1"]
+        assert os.environ["CQA_BOM1"] == "secret"
+    finally:
+        os.environ.pop("CQA_BOM1", None)
