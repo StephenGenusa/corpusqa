@@ -35,6 +35,9 @@ def _config_text(
     extract_price: float = 0.0,
     confirm_above: float = 100.0,
     extra_providers: str = "",
+    route_provider: str = "local",
+    route_model: str = "ollama/m",
+    sweep_threshold: int = 150,
 ) -> str:
     def task(name: str, provider: str, model: str, ctx: int, price: float) -> str:
         return (
@@ -47,9 +50,12 @@ def _config_text(
             f"    cost_per_mtok_out: {price}\n"
         )
 
-    tasks = "".join(
-        task(n, "local", "ollama/m", 32768, 0.0)
-        for n in ("catalog_summarize", "query_route", "synthesize")
+    tasks = (
+        "".join(
+            task(n, route_provider, route_model, 32768, 0.0)
+            for n in ("catalog_summarize", "query_route")
+        )
+        + task("synthesize", "local", "ollama/m", 32768, 0.0)
     ) + task("extract", extract_provider, extract_model, extract_context, extract_price)
     return (
         "providers:\n"
@@ -60,6 +66,8 @@ def _config_text(
         f"{tasks}"
         "budget:\n"
         f"  confirm_above_usd: {confirm_above}\n"
+        "query:\n"
+        f"  sweep_threshold: {sweep_threshold}\n"
     )
 
 
@@ -711,3 +719,108 @@ def test_stdout_carries_only_protocol_lines(tmp_path: Path, entry: list[str]) ->
     if entry[0] == "-c":
         assert "LEAK from print" in proc.stderr.decode()
         assert "LEAK from fd 1" in proc.stderr.decode()
+
+
+_REMOTE = (
+    "  remote:\n"
+    '    api_base: "https://example.invalid/v1"\n'
+    "    api_key_env: MISSING_KEY\n"
+)
+
+
+def _route_keyless(tmp_path: Path, **kwargs: Any) -> Path:
+    return _write_config(
+        tmp_path,
+        route_provider="remote",
+        route_model="openai/x",
+        extra_providers=_REMOTE,
+        **kwargs,
+    )
+
+
+def test_sweep_ignores_missing_key_of_unused_route_tasks(
+    md_corpus: Path,
+    tmp_path: Path,
+    harness: Callable[..., Harness],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MISSING_KEY", raising=False)
+    fake = FakeClient({TaskName.EXTRACT: [_extraction()]})
+    h = harness(_route_keyless(tmp_path), client=fake)
+    h.send(_start(md_corpus, mode="sweep"))
+    done = h.event("done")
+    assert done["cancelled"] is False
+    assert not [e for e in h.events() if e["event"] == "error"]
+    assert len(fake.calls[TaskName.EXTRACT]) == 1
+
+
+def test_route_mode_with_missing_route_key_errors_first(
+    md_corpus: Path,
+    tmp_path: Path,
+    harness: Callable[..., Harness],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MISSING_KEY", raising=False)
+    fake = FakeClient({})
+    h = harness(_route_keyless(tmp_path), client=fake)
+    h.send(_start(md_corpus, mode="route"))
+    h.event("done")
+    events = h.events()
+    assert events[0]["event"] == "error" and "MISSING_KEY" in events[0]["message"]
+    assert not any(e["event"] == "progress" for e in events)
+    assert not fake.calls
+
+
+def test_auto_resolving_to_route_checks_key_after_conversion(
+    md_corpus: Path,
+    tmp_path: Path,
+    harness: Callable[..., Harness],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MISSING_KEY", raising=False)
+    fake = FakeClient({})
+    # threshold 0: one parseable file is above it, so auto resolves to route
+    h = harness(_route_keyless(tmp_path, sweep_threshold=0), client=fake)
+    h.send(_start(md_corpus, mode="auto"))
+    done = h.event("done")
+    kinds = [e["event"] for e in h.events()]
+    phases = [e["phase"] for e in h.events() if e["event"] == "progress"]
+    assert phases and set(phases) == {"converting"}  # conversion ran
+    error = next(e for e in h.events() if e["event"] == "error")
+    assert "MISSING_KEY" in error["message"]
+    assert kinds.index("error") > kinds.index("progress")
+    assert not fake.calls  # no catalog, routing or extraction call
+    assert done["cancelled"] is False
+
+
+def test_auto_resolving_to_sweep_ignores_route_key(
+    md_corpus: Path,
+    tmp_path: Path,
+    harness: Callable[..., Harness],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MISSING_KEY", raising=False)
+    fake = FakeClient({TaskName.EXTRACT: [_extraction()]})
+    h = harness(_route_keyless(tmp_path), client=fake)
+    h.send(_start(md_corpus, mode="auto"))
+    assert h.event("done")["cancelled"] is False
+    assert not [e for e in h.events() if e["event"] == "error"]
+
+
+def test_lm_studio_preflight_skips_unused_tasks(
+    md_corpus: Path, tmp_path: Path, harness: Callable[..., Harness]
+) -> None:
+    cfg = _write_config(
+        tmp_path,
+        route_provider="lms",
+        route_model="lm_studio/qwen",
+        extra_providers=_LM,
+    )
+    listing = ModelListing(
+        models=[ModelInfo(id="lm_studio/qwen", loaded=True, loaded_context=4096)]
+    )
+    fake = FakeClient({TaskName.EXTRACT: [_extraction()]})
+    h = harness(cfg, client=fake, list_models_fn=_lm_listing(listing))
+    h.send(_start(md_corpus, mode="sweep"))
+    assert h.event("done")["cancelled"] is False
+    assert not [e for e in h.events() if e["event"] in ("error", "notice")]

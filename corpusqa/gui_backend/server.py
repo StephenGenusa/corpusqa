@@ -33,7 +33,12 @@ from pydantic import BaseModel, ValidationError
 
 from corpusqa.catalog.store import CatalogStore
 from corpusqa.config import load_config
-from corpusqa.config.schema import AppConfig, ProviderConfig, provider_kind
+from corpusqa.config.schema import (
+    AppConfig,
+    ProviderConfig,
+    TaskName,
+    provider_kind,
+)
 from corpusqa.config.writer import config_as_dict, save_config_changes
 from corpusqa.errors import BudgetExceededError, ConfigError, CorpusQAError
 from corpusqa.gui_backend.env import load_dotenv
@@ -119,6 +124,16 @@ def _estimate_lines(estimate: CostEstimate) -> list[str]:
             "their cost is not in this estimate."
         )
     return lines
+
+
+_ROUTE_TASKS = (TaskName.CATALOG_SUMMARIZE, TaskName.QUERY_ROUTE)
+
+
+def _resolve_auto_mode(folder: Path, config: AppConfig) -> str:
+    """Resolves ``auto`` exactly as ``run_query`` does, from the catalog."""
+    with CatalogStore(index_paths(folder.resolve())[1]) as store:
+        parseable = len(store.all_parseable_files())
+    return "sweep" if parseable <= config.query.sweep_threshold else "route"
 
 
 def _bare_model(model: str) -> str:
@@ -437,8 +452,15 @@ class Server:
     ) -> DoneEvent:
         folder = Path(params.folder)
         self._phase = "preflight"
-        self._check_api_keys(config)
-        await self._lm_studio_preflight(config)
+        # Check only the tasks this run uses. Auto mode picks sweep or route
+        # from the parseable file count, known only after conversion, so its
+        # routing tasks are checked then (still before any LLM spend).
+        tasks = [TaskName.EXTRACT]
+        if params.synthesize:
+            tasks.append(TaskName.SYNTHESIZE)
+        if params.mode == "route":
+            tasks.extend(_ROUTE_TASKS)
+        await self._preflight(config, tasks)
         if self._cancel.is_set():
             return DoneEvent(cancelled=True)
 
@@ -455,13 +477,21 @@ class Server:
         if report.stopped or self._cancel.is_set():
             return DoneEvent(cancelled=True)
 
+        mode: str = params.mode
+        if mode == "auto":
+            mode = _resolve_auto_mode(folder, config)
+            if mode == "route":
+                self._phase = "preflight"
+                await self._preflight(config, list(_ROUTE_TASKS))
+                self._phase = "querying"
+
         client = self._client_factory(config) if self._client_factory else None
         result = await run_query(
             folder,
             params.question,
             config,
             definition=params.definition or None,
-            mode=params.mode,
+            mode=mode,
             relevance=params.relevance,
             use_cache=params.use_cache,
             synthesize_answer=params.synthesize,
@@ -475,8 +505,12 @@ class Server:
             answer=result.answer.text if result.answer is not None else None,
         )
 
-    def _check_api_keys(self, config: AppConfig) -> None:
-        for task in config.tasks.values():
+    async def _preflight(self, config: AppConfig, tasks: list[TaskName]) -> None:
+        self._check_api_keys(config, tasks)
+        await self._lm_studio_preflight(config, tasks)
+
+    def _check_api_keys(self, config: AppConfig, tasks: list[TaskName]) -> None:
+        for task in (config.tasks[t] for t in tasks):
             provider = config.providers[task.provider]
             var = provider.api_key_env
             if var and not os.environ.get(var):
@@ -485,10 +519,12 @@ class Server:
                     f"set it in your environment or in .env ({self._env_path})"
                 )
 
-    async def _lm_studio_preflight(self, config: AppConfig) -> None:
+    async def _lm_studio_preflight(
+        self, config: AppConfig, tasks: list[TaskName]
+    ) -> None:
         listings: dict[str, ModelListing] = {}
         noticed: set[tuple[str, int]] = set()
-        for task in config.tasks.values():
+        for task in (config.tasks[t] for t in tasks):
             provider = config.providers[task.provider]
             if provider_kind(task.provider, provider) != "lm_studio":
                 continue
