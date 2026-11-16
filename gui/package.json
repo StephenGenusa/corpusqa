@@ -1,0 +1,14 @@
+{
+  "name": "corpusqa-gui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop GUI for corpusqa",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "devDependencies": {
+    "electron": "45.3.2"
+  }
+}

@@ -1,0 +1,373 @@
+// Renderer entry: top bar, run lifecycle and backend event dispatch.
+
+import { h, clear, call, fmtInt, fmtElapsed, loadLocal, saveLocal } from './dom.js';
+import { ResultsView } from './results.js';
+import { ReaderView } from './reader-view.js';
+import { SettingsDrawer } from './settings.js';
+
+const TASK_NAMES = ['catalog_summarize', 'query_route', 'extract', 'synthesize'];
+const $ = (id) => document.getElementById(id);
+
+const els = {
+  folder: $('folder'), browse: $('browse'), question: $('question'), definition: $('definition'),
+  provider: $('provider'), model: $('model'), modelList: $('model-list'), mixed: $('mixed'),
+  modelError: $('model-error'), run: $('run'), cancel: $('cancel'),
+  statusText: $('status-text'), barFill: $('bar-fill'),
+  errorPanel: $('error-panel'), errorMessage: $('error-message'), errorTail: $('error-tail'),
+  restart: $('restart'), errorDismiss: $('error-dismiss'), notices: $('notices'),
+  costDialog: $('cost-dialog'), costTotal: $('cost-total'), costLines: $('cost-lines'),
+  costProceed: $('cost-proceed'), costCancel: $('cost-cancel'),
+};
+
+const state = {
+  config: null,
+  running: false,
+  runFolder: '',
+  startedAt: 0,
+  timer: null,
+  phase: '',
+  models: new Map(), // provider -> Promise<{models, error}>
+  pendingCost: null,
+  selectionDirty: false, // top-bar provider/model edited but not yet saved
+  runError: false,
+};
+
+const results = new ResultsView({
+  list: $('results'), summary: $('results-summary'), empty: $('results-empty'),
+  problems: $('problems'), problemList: $('problem-list'), problemCount: $('problem-count'),
+  answer: $('answer'),
+}, (row) => reader.open(row));
+
+const reader = new ReaderView({
+  head: $('reader-head'), file: $('reader-file'), page: $('reader-page'),
+  notice: $('reader-notice'), scroll: $('reader-scroll'), doc: $('reader-doc'),
+}, () => state.runFolder || els.folder.value.trim());
+
+const drawer = new SettingsDrawer($('drawer'), $('drawer-toggle'), {
+  getModels,
+  onConfig: (config) => applyConfig(config),
+});
+
+// ---- config, provider and model ------------------------------------------
+
+function getModels(provider, { refresh = false } = {}) {
+  if (refresh || !state.models.has(provider)) {
+    state.models.set(provider, call('models.list', { provider }).catch((e) => ({ models: [], error: e.message })));
+  }
+  return state.models.get(provider);
+}
+
+function applyConfig(config) {
+  state.config = config;
+  const tasks = TASK_NAMES.map((t) => config.tasks[t]);
+  const extract = config.tasks.extract;
+  const mixed = tasks.some((t) => t.model !== extract.model || t.provider !== extract.provider);
+  clear(els.provider);
+  for (const name of Object.keys(config.providers)) {
+    els.provider.append(h('option', { value: name, text: name, selected: name === extract.provider }));
+  }
+  els.model.value = extract.model;
+  els.mixed.hidden = !mixed;
+  fillModelList(extract.provider);
+}
+
+async function fillModelList(provider, refresh = false) {
+  const listing = await getModels(provider, { refresh });
+  if (els.provider.value !== provider) return;
+  clear(els.modelList);
+  for (const m of listing.models) {
+    let label = '';
+    if (m.loaded === true) label = m.loaded_context ? `loaded · ${fmtInt(m.loaded_context)} ctx` : 'loaded';
+    else if (m.loaded === false) label = 'not loaded';
+    else if (m.max_context) label = `${fmtInt(m.max_context)} ctx`;
+    els.modelList.append(h('option', { value: m.id, label: label || null }));
+  }
+  showModelError(listing.error ? `Model list unavailable: ${listing.error}. You can still type a model name.` : null);
+}
+
+function showModelError(message) {
+  els.modelError.textContent = message || '';
+  els.modelError.hidden = !message;
+}
+
+/**
+ * Saves the top-bar provider/model to all four tasks. Only a choice the user
+ * made in the top bar is saved, so a mixed per-task setup is left alone.
+ */
+async function saveSelection() {
+  if (!state.config) return false;
+  if (!state.selectionDirty) return true;
+  const provider = els.provider.value;
+  const model = els.model.value.trim();
+  if (!model) {
+    showModelError('Choose or type a model.');
+    return false;
+  }
+  const changes = [];
+  for (const t of TASK_NAMES) {
+    const cfg = state.config.tasks[t];
+    if (cfg.model !== model) changes.push([['tasks', t, 'model'], model]);
+    if (cfg.provider !== provider) changes.push([['tasks', t, 'provider'], provider]);
+  }
+  if (!changes.length) {
+    state.selectionDirty = false;
+    return true;
+  }
+  try {
+    const res = await call('config.save', { changes });
+    state.selectionDirty = false;
+    applyConfig(res.config);
+    drawer.setConfig(res.config);
+    showModelError(null);
+    return true;
+  } catch (e) {
+    const detail = Object.values(e.fields || {}).join('; ');
+    showModelError(`Could not save the model choice: ${detail || e.message}`);
+    return false;
+  }
+}
+
+els.provider.addEventListener('change', () => {
+  state.selectionDirty = true;
+  els.model.value = '';
+  fillModelList(els.provider.value, true);
+  els.model.focus();
+});
+els.model.addEventListener('input', () => {
+  state.selectionDirty = true;
+});
+els.model.addEventListener('change', () => {
+  state.selectionDirty = true;
+  if (els.model.value.trim()) saveSelection();
+});
+
+async function loadConfig() {
+  try {
+    const { config } = await call('config.get');
+    applyConfig(config);
+    drawer.setConfig(config);
+    return true;
+  } catch (e) {
+    showError(`The configuration could not be loaded: ${e.message}`);
+    return false;
+  }
+}
+
+// ---- folder and query options --------------------------------------------
+
+els.folder.value = loadLocal('corpusqa.folder', '');
+els.definition.value = loadLocal('corpusqa.definition', '');
+els.folder.addEventListener('change', () => saveLocal('corpusqa.folder', els.folder.value.trim()));
+els.definition.addEventListener('change', () => saveLocal('corpusqa.definition', els.definition.value));
+els.browse.addEventListener('click', async () => {
+  const picked = await window.corpusqa.pickFolder(els.folder.value.trim());
+  if (picked) {
+    els.folder.value = picked;
+    saveLocal('corpusqa.folder', picked);
+  }
+});
+els.question.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !state.running) startRun();
+});
+
+// ---- status, errors and notices -------------------------------------------
+
+function setStatus(text, fraction = null) {
+  const elapsed = state.startedAt ? ` · ${fmtElapsed(Date.now() - state.startedAt)}` : '';
+  els.statusText.textContent = text + (state.running ? elapsed : '');
+  els.barFill.style.width = fraction === null ? '0%' : `${Math.round(fraction * 1000) / 10}%`;
+  els.barFill.parentElement.classList.toggle('busy', state.running && fraction === null);
+}
+
+function showError(message, stderrTail = null, canRestart = false) {
+  els.errorMessage.textContent = message;
+  els.errorTail.textContent = stderrTail && stderrTail.length ? stderrTail.join('\n') : '';
+  els.errorTail.hidden = !els.errorTail.textContent;
+  els.restart.hidden = !canRestart;
+  els.errorPanel.hidden = false;
+  els.errorTail.scrollTop = els.errorTail.scrollHeight; // the last lines name the error
+}
+
+function hideError() {
+  els.errorPanel.hidden = true;
+}
+
+els.errorDismiss.addEventListener('click', hideError);
+els.restart.addEventListener('click', async () => {
+  els.restart.disabled = true;
+  try {
+    await window.corpusqa.restartBackend();
+    state.models.clear();
+    hideError();
+    await loadConfig();
+    setStatus('Backend restarted');
+  } finally {
+    els.restart.disabled = false;
+  }
+});
+
+function addNotice(message) {
+  for (const n of els.notices.children) if (n.dataset.message === message) return;
+  const note = h('div', { class: 'notice', role: 'status', dataset: { message } },
+    h('p', { text: message }),
+    h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'Dismiss', text: '×', onclick: () => note.remove() }));
+  els.notices.append(note);
+}
+
+// ---- run lifecycle ---------------------------------------------------------
+
+function setRunning(running) {
+  state.running = running;
+  document.body.dataset.runState = running ? 'running' : 'done';
+  els.run.hidden = running;
+  els.cancel.hidden = !running;
+  els.cancel.disabled = false;
+  els.folder.disabled = running;
+  els.browse.disabled = running;
+  els.provider.disabled = running;
+  els.model.disabled = running;
+  clearInterval(state.timer);
+  state.timer = running ? setInterval(() => setStatus(state.phase, state.fraction), 1000) : null;
+}
+
+async function startRun() {
+  const folder = els.folder.value.trim();
+  const question = els.question.value.trim();
+  if (!folder) {
+    els.folder.focus();
+    setStatus('Choose a folder first');
+    return;
+  }
+  if (!question) {
+    els.question.focus();
+    setStatus('Type a question first');
+    return;
+  }
+  els.run.disabled = true;
+  try {
+    if (!(await saveSelection())) return;
+    saveLocal('corpusqa.folder', folder);
+    saveLocal('corpusqa.definition', els.definition.value);
+    hideError();
+    clear(els.notices);
+    results.reset();
+    if (state.runFolder !== folder) reader.clearCache();
+    state.runFolder = folder;
+    const definition = els.definition.value.trim();
+    state.startedAt = Date.now();
+    state.phase = 'Starting';
+    state.fraction = null;
+    state.runError = false;
+    setRunning(true);
+    setStatus('Starting');
+    try {
+      await call('run.start', { folder, question, definition: definition || null, ...drawer.queryOptions() });
+    } catch (e) {
+      setRunning(false);
+      state.startedAt = 0;
+      setStatus('Not started');
+      showError(e.message);
+    }
+  } finally {
+    els.run.disabled = false;
+  }
+}
+
+els.run.addEventListener('click', startRun);
+els.cancel.addEventListener('click', async () => {
+  els.cancel.disabled = true;
+  state.phase = 'Cancelling';
+  setStatus('Cancelling', state.fraction);
+  try {
+    await call('run.cancel');
+  } catch (e) {
+    showError(e.message);
+  }
+});
+
+function onProgress(ev) {
+  const total = ev.total || 0;
+  if (ev.phase === 'converting') {
+    state.phase = `Converting documents ${fmtInt(ev.done)}/${fmtInt(total)}`;
+  } else {
+    state.phase = `Reading ${fmtInt(ev.done)}/${fmtInt(total)} sections`;
+  }
+  state.fraction = total ? ev.done / total : null;
+  if (!els.cancel.disabled) setStatus(state.phase, state.fraction);
+}
+
+function onDone(ev) {
+  const elapsed = fmtElapsed(Date.now() - state.startedAt);
+  state.startedAt = 0;
+  setRunning(false);
+  results.setFailures(ev.failures);
+  if (ev.answer) results.setAnswer(ev.answer);
+  const n = results.rows.length;
+  if (ev.cancelled) setStatus(`Cancelled after ${elapsed}`);
+  else if (state.runError) setStatus(`Stopped with an error after ${elapsed}`);
+  else setStatus(`Finished in ${elapsed} · ${fmtInt(n)} finding${n === 1 ? '' : 's'}`, 1);
+}
+
+function onCostConfirm(ev) {
+  state.pendingCost = ev.run_id;
+  els.costTotal.textContent = `Estimated total: $${ev.estimate.total_usd.toFixed(2)}`;
+  clear(els.costLines);
+  for (const line of ev.estimate.lines) els.costLines.append(h('li', { text: line }));
+  els.costDialog.showModal();
+}
+
+async function answerCost(proceed) {
+  const runId = state.pendingCost;
+  state.pendingCost = null;
+  if (els.costDialog.open) els.costDialog.close();
+  if (runId === null) return;
+  try {
+    await call('cost.reply', { run_id: runId, proceed });
+  } catch (e) {
+    showError(e.message);
+  }
+}
+
+els.costProceed.addEventListener('click', () => answerCost(true));
+els.costCancel.addEventListener('click', () => answerCost(false));
+els.costDialog.addEventListener('cancel', (e) => {
+  e.preventDefault();
+  answerCost(false);
+});
+
+window.corpusqa.onEvent((ev) => {
+  switch (ev.event) {
+    case 'progress': onProgress(ev); break;
+    case 'flags': results.setFlags(ev.items); break;
+    case 'file_result': results.addFileResult(ev); break;
+    case 'notice': addNotice(ev.message); break;
+    case 'cost.confirm': onCostConfirm(ev); break;
+    case 'error':
+      if (state.running) state.runError = true;
+      showError(ev.message);
+      break;
+    case 'done': onDone(ev); break;
+    case 'backend.exit':
+      if (els.costDialog.open) els.costDialog.close();
+      state.pendingCost = null;
+      if (state.running) {
+        state.startedAt = 0;
+        setRunning(false);
+      }
+      setStatus('Backend stopped');
+      showError(`The backend stopped unexpectedly (exit code ${ev.code ?? 'none'}).`, ev.stderrTail, true);
+      break;
+    default: break;
+  }
+});
+
+// ---- start -------------------------------------------------------------------
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && drawer.isOpen) drawer.close();
+});
+
+loadConfig().finally(() => {
+  document.body.dataset.ready = '1';
+  document.body.dataset.runState = 'idle';
+});

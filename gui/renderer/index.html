@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>corpusqa</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="row">
+      <button id="drawer-toggle" class="icon-btn" type="button" aria-label="Settings"
+              aria-expanded="false" aria-controls="drawer" title="Settings">&#8801;</button>
+      <label class="field grow">
+        <span class="label">Folder</span>
+        <input id="folder" type="text" spellcheck="false" autocomplete="off"
+               placeholder="Choose a folder of documents">
+      </label>
+      <button id="browse" type="button">Browse…</button>
+    </div>
+    <div class="row">
+      <label class="field grow">
+        <span class="label">Question</span>
+        <input id="question" type="text" autocomplete="off"
+               placeholder="What do these documents say about…?">
+      </label>
+      <button id="run" class="primary" type="button">Run</button>
+      <button id="cancel" type="button" hidden>Cancel</button>
+    </div>
+    <div class="row row-def">
+      <label class="field grow">
+        <span class="label">Definition <span class="hint">(optional)</span></span>
+        <input id="definition" type="text" autocomplete="off"
+               placeholder="What the topic means for this question">
+      </label>
+    </div>
+    <div class="row row-models">
+      <label class="field">
+        <span class="label">Provider</span>
+        <select id="provider"></select>
+      </label>
+      <label class="field field-model">
+        <span class="label">Model <span id="mixed" class="badge badge-muted" hidden
+              title="The four tasks use different models; this shows the extract model">mixed</span></span>
+        <input id="model" type="text" list="model-list" spellcheck="false" autocomplete="off">
+        <datalist id="model-list"></datalist>
+      </label>
+      <div class="status" role="status" aria-live="polite">
+        <div class="bar" aria-hidden="true"><div id="bar-fill" class="bar-fill"></div></div>
+        <span id="status-text">Ready</span>
+      </div>
+    </div>
+    <p id="model-error" class="field-error topbar-error" hidden></p>
+  </header>
+
+  <main class="panes">
+    <section class="results-pane" aria-label="Results">
+      <aside id="drawer" class="drawer" aria-label="Settings" inert></aside>
+      <div id="results-scroll" class="results-scroll">
+        <div id="error-panel" class="error-panel" role="alert" hidden>
+          <p id="error-message" class="error-message"></p>
+          <pre id="error-tail" class="error-tail" hidden></pre>
+          <div class="error-actions">
+            <button id="restart" type="button" hidden>Restart backend</button>
+            <button id="error-dismiss" type="button">Dismiss</button>
+          </div>
+        </div>
+        <div id="notices"></div>
+        <section id="answer" class="answer" hidden aria-label="Answer"></section>
+        <details id="problems" class="problems" hidden>
+          <summary>Problems <span id="problem-count" class="count"></span></summary>
+          <ul id="problem-list"></ul>
+        </details>
+        <p id="results-summary" class="results-summary"></p>
+        <ol id="results" class="results" aria-label="Findings"></ol>
+        <p id="results-empty" class="empty">Choose a folder, ask a question and press Run.
+          Every document is read in full; findings appear here as each file finishes.</p>
+      </div>
+    </section>
+
+    <section class="reader-pane" aria-label="Reader">
+      <div id="reader-head" class="reader-head" hidden>
+        <span id="reader-file" class="reader-file"></span>
+        <span id="reader-page" class="reader-page"></span>
+      </div>
+      <p id="reader-notice" class="reader-notice" hidden></p>
+      <div id="reader-scroll" class="reader-scroll" tabindex="0">
+        <article id="reader-doc" class="reader-doc">
+          <p class="empty reader-empty">Select a finding to read it in context.</p>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="cost-dialog" class="cost-dialog" aria-labelledby="cost-title">
+    <h2 id="cost-title">Confirm estimated cost</h2>
+    <p id="cost-total" class="cost-total"></p>
+    <ul id="cost-lines" class="cost-lines"></ul>
+    <div class="dialog-actions">
+      <button id="cost-cancel" type="button">Cancel run</button>
+      <button id="cost-proceed" class="primary" type="button">Proceed</button>
+    </div>
+  </dialog>
+
+  <script src="../src/reader.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

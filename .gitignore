@@ -32,3 +32,6 @@ local/
 
 # Secrets
 .env
+
+# Electron GUI dependencies
+gui/node_modules/
