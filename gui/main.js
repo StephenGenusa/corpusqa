@@ -1,8 +1,11 @@
 'use strict';
 
-const { app, BrowserWindow, dialog, ipcMain, nativeTheme, shell } = require('electron');
+const {
+  app, BrowserWindow, dialog, ipcMain, nativeTheme, powerSaveBlocker, shell,
+} = require('electron');
 const path = require('node:path');
 const { Backend, ensureUserConfig, resolveBackend } = require('./src/bridge');
+const { createSleepGuard, trackRun } = require('./src/sleep-guard');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 
@@ -11,8 +14,12 @@ let backend = null;
 let configPath = null;
 let backendStopped = false;
 let stopping = false;
+// No system suspension while a run is in progress (runs can take hours).
+const sleepGuard = createSleepGuard(powerSaveBlocker);
+const runTracker = trackRun(sleepGuard);
 
 function send(event) {
+  runTracker.event(event);
   if (win && !win.isDestroyed()) win.webContents.send('backend-event', event);
 }
 
@@ -78,8 +85,10 @@ function createWindow() {
 ipcMain.handle('backend', async (_e, cmd, params) => {
   try {
     const result = await backend.request(String(cmd), params || {});
+    runTracker.reply(String(cmd), true);
     return { ok: true, result };
   } catch (err) {
+    runTracker.reply(String(cmd), false);
     return { ok: false, error: err.message, fields: err.fields || {} };
   }
 });
@@ -114,6 +123,7 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => app.quit());
+app.on('will-quit', () => sleepGuard.stop());
 
 // Give the backend a chance to stop cleanly (it may be mid-conversion of a
 // large file): close its stdin, wait, then kill it.
