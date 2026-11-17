@@ -25,6 +25,7 @@ from corpusqa.logging_setup import configure as configure_logging
 from corpusqa.query.budget import CostEstimate
 from corpusqa.query.hits import render_hits
 from corpusqa.query.pipeline import run_estimate, run_query
+from corpusqa.query.results_file import ResultsWriter
 
 if TYPE_CHECKING:
     from tqdm import tqdm
@@ -89,6 +90,12 @@ def _build_parser() -> argparse.ArgumentParser:
     p_query.add_argument("--definition", default=None)
     p_query.add_argument("--yes", action="store_true")
     p_query.add_argument("--show-cost", action="store_true")
+    p_query.add_argument(
+        "--save",
+        action="store_true",
+        help="save the run (question, settings, every file's verdict and "
+        "findings) to <directory>/.corpusqa/results/*.json as it goes",
+    )
     p_query.add_argument(
         "--synthesize",
         action="store_true",
@@ -295,6 +302,16 @@ def _cmd_query(args: argparse.Namespace, config: AppConfig) -> int:
     corpus = args.directory
     _warn_drift(corpus, config)
     progress = _Progress()
+    saved = None
+    if args.save and index_paths(corpus.resolve())[1].exists():
+        saved = ResultsWriter.create(
+            corpus,
+            question=args.question,
+            definition=args.definition,
+            relevance=args.relevance,
+            mode="sweep" if args.all_files else args.mode,
+            config=config,
+        )
     try:
         report = asyncio.run(
             run_query(
@@ -309,6 +326,7 @@ def _cmd_query(args: argparse.Namespace, config: AppConfig) -> int:
                 synthesize_answer=args.synthesize,
                 on_progress=progress,
                 confirm=(lambda e: True) if args.yes else _confirm,
+                results_file=saved,
             )
         )
     except BudgetExceededError as exc:
@@ -317,6 +335,14 @@ def _cmd_query(args: argparse.Namespace, config: AppConfig) -> int:
         return EXIT_USER_ERROR
     finally:
         progress.close()
+        if saved is not None:
+            if saved.write_error:
+                print(
+                    f"warning: could not save results: {saved.write_error}",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"results saved to {saved.path}", file=sys.stderr)
 
     if report.card_report.failed:
         for rel_path, error in report.card_report.failed:

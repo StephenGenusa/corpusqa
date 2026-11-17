@@ -200,7 +200,8 @@ async function run(win, quit) {
       fieldError: document.querySelector('${temp}').parentElement.querySelector('.field-error').textContent,
     })`);
     await shot('3-drawer-error');
-    await setInput(temp, '0.3');
+    // A value that differs from the saved one, so there is something to save.
+    await setInput(temp, before === '0.3' ? '0.4' : '0.3');
     await click('#drawer .drawer-foot button.primary');
     await wait(`/Saved/.test(document.querySelector('#drawer .drawer-status').textContent)`, 10000, 'save');
     summary.steps.drawer = {
@@ -214,6 +215,27 @@ async function run(win, quit) {
     await click('#drawer .drawer-head button');
     await sleep(400);
     summary.steps.drawer.closed = !(await js(`document.getElementById('drawer').classList.contains('open')`));
+
+    // Open results: the run just saved a file; reopen it into a fresh view.
+    const resultsDir = path.join(env.CORPUSQA_SMOKE_FOLDER, '.corpusqa', 'results');
+    const saved = fs.readdirSync(resultsDir).filter((n) => n.endsWith('.json')).sort();
+    process.env.CORPUSQA_SMOKE_PICK = path.join(resultsDir, saved[saved.length - 1]);
+    const rowsBefore = await js(`document.querySelectorAll('#results li').length`);
+    await click('#open-results');
+    await wait(`document.getElementById('status-text').textContent.startsWith('Saved results from')`, 10000, 'saved results');
+    await click('#results li button.hit');
+    await wait(`document.querySelector('#reader-doc mark') || !document.getElementById('reader-notice').hidden`, 10000, 'reader on saved results');
+    summary.steps.openResults = await js(`({
+      file: ${JSON.stringify(path.basename(process.env.CORPUSQA_SMOKE_PICK))},
+      status: document.getElementById('status-text').textContent,
+      rowsBefore: ${rowsBefore},
+      rows: document.querySelectorAll('#results li').length,
+      question: document.getElementById('question').value,
+      marked: !!document.querySelector('#reader-doc mark'),
+      notice: document.getElementById('reader-notice').hidden ? null : document.getElementById('reader-notice').textContent,
+    })`);
+    await shot('3-opened-results');
+    delete process.env.CORPUSQA_SMOKE_PICK;
 
     // Cancel: start again (cache off) and cancel once reading starts.
     await click('#run');

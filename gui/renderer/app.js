@@ -11,7 +11,7 @@ const { EtaEstimator, fmtRemaining } = window.CorpusEta;
 const $ = (id) => document.getElementById(id);
 
 const els = {
-  folder: $('folder'), browse: $('browse'), question: $('question'), definition: $('definition'),
+  folder: $('folder'), browse: $('browse'), openResults: $('open-results'), question: $('question'), definition: $('definition'),
   provider: $('provider'), model: $('model'), modelCustom: $('model-custom'), modelRefresh: $('model-refresh'), mixed: $('mixed'),
   modelError: $('model-error'), run: $('run'), cancel: $('cancel'),
   statusText: $('status-text'), barFill: $('bar-fill'),
@@ -220,6 +220,58 @@ els.question.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !state.running) startRun();
 });
 
+// ---- saved results ----------------------------------------------------------
+
+async function openResults() {
+  if (state.running) return;
+  const folder = els.folder.value.trim();
+  const picked = await window.corpusqa.pickResultsFile(folder ? `${folder}/.corpusqa/results` : '');
+  if (!picked) return;
+  let loaded;
+  try {
+    loaded = await call('results.load', { path: picked });
+  } catch (e) {
+    showError(`Could not open ${picked}: ${e.message}`);
+    return;
+  }
+  showSavedRun(loaded.run, loaded.sources || {});
+}
+
+/** Shows a saved run as if it had just finished; nothing is re-read. */
+function showSavedRun(run, sources) {
+  hideError();
+  clear(els.notices);
+  results.reset();
+  reader.clearCache();
+  state.runFolder = run.corpus;
+  els.folder.value = run.corpus;
+  els.question.value = run.question;
+  els.definition.value = run.definition || '';
+  const failures = [];
+  for (const f of run.files) {
+    if (f.status === 'failed' || f.status === 'partial') failures.push([f.rel_path, f.error || f.status]);
+    if (f.status === 'failed') continue;
+    const source = sources[f.rel_path] || 'same';
+    results.addFileResult({
+      rel_path: f.rel_path,
+      relevant: f.status === 'relevant' || (f.status === 'partial' && f.findings.length > 0),
+      findings: f.findings.map((x) => ({ ...x, source })),
+    });
+  }
+  results.setFailures(failures);
+  if (run.answer) results.setAnswer(run.answer.text);
+  const when = new Date(run.started_at).toLocaleString();
+  const outcome = { finished: '', cancelled: ' (cancelled)', failed: ' (stopped by an error)', running: ' (did not finish)' }[run.outcome] ?? '';
+  const n = results.rows.length;
+  setStatus(`Saved results from ${when}${outcome} · ${fmtInt(n)} finding${n === 1 ? '' : 's'}`, run.outcome === 'finished' ? 1 : null);
+  const stale = Object.values(sources).filter((v) => v !== 'same').length;
+  if (stale) {
+    addNotice(`${fmtInt(stale)} document${stale === 1 ? ' has' : 's have'} changed or gone since these results were saved; their quotes cannot be shown in context.`);
+  }
+}
+
+els.openResults.addEventListener('click', openResults);
+
 // ---- status, errors and notices -------------------------------------------
 
 function setStatus(text, fraction = null) {
@@ -280,6 +332,7 @@ function setRunning(running) {
   els.cancel.disabled = false;
   els.folder.disabled = running;
   els.browse.disabled = running;
+  els.openResults.disabled = running;
   els.provider.disabled = running;
   els.model.disabled = running;
   els.modelCustom.disabled = running;

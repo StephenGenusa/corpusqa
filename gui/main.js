@@ -117,6 +117,20 @@ ipcMain.handle('pick-folder', async (_e, defaultPath) => {
   return res.canceled || res.filePaths.length === 0 ? null : res.filePaths[0];
 });
 
+ipcMain.handle('pick-results-file', async (_e, defaultPath) => {
+  // The smoke driver cannot click a native dialog; it names the file instead.
+  if (process.env.CORPUSQA_SMOKE === '1' && process.env.CORPUSQA_SMOKE_PICK) {
+    return process.env.CORPUSQA_SMOKE_PICK;
+  }
+  const res = await dialog.showOpenDialog(win, {
+    title: 'Open saved results',
+    defaultPath: typeof defaultPath === 'string' && defaultPath ? defaultPath : undefined,
+    properties: ['openFile'],
+    filters: [{ name: 'corpusqa results', extensions: ['json'] }],
+  });
+  return res.canceled || res.filePaths.length === 0 ? null : res.filePaths[0];
+});
+
 app.whenReady().then(() => {
   createBackend();
   createWindow();

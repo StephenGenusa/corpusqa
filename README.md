@@ -52,6 +52,14 @@ per-user app data folder and are seeded from `corpusqa.example.yaml` on first
 launch. Docling downloads its PDF models the first time a PDF is converted.
 LibreOffice, Ollama and LM Studio are not bundled; install them separately.
 
+**Saved results.** Every GUI run is saved as it goes to
+`<corpus>/.corpusqa/results/<time>-<question>.json`: the question, definition,
+settings, provider and model, each file's verdict, reasoning and findings (with
+pages and positions), the synthesized answer, and whether the run finished, was
+cancelled or failed. **Open results…** loads one back without any model calls;
+if a document has changed since, its quotes are shown without highlighting and
+the app says why. `corpusqa query … --save` writes the same file from the CLI.
+
 **From source** (needs Node.js): `corpusqa gui [--config PATH]` runs
 `npm install` in `gui/` if needed, then starts the app with the current Python
 interpreter. The backend reads `.env` from the config file's directory.
@@ -202,6 +210,7 @@ corpusqa query "<question>" <dir>
         [--definition "..."]                   # judge relevance against YOUR definition
         [--synthesize]                         # compose a cited prose answer (default: show hits)
         [--section-tokens N]                   # override tasks.extract.max_input_tokens (default: fill the window)
+        [--save]                               # save the run to <dir>/.corpusqa/results/*.json as it goes
         [--no-cache] [--yes] [--show-cost] [--all-files]
 corpusqa explain <file> <dir>                  # persisted verdicts + model reasoning for one file
 corpusqa-eval <dir> --pairs tests/eval/qa_pairs.yaml

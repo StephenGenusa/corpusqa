@@ -8,12 +8,13 @@ interactive confirmation. Costs are aggregated per task and recorded to
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import functools
 import hashlib
 import json
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from corpusqa.query.extractor import (
     section_token_budget,
     snap_findings,
 )
+from corpusqa.query.results_file import ResultsWriter
 from corpusqa.query.router import Candidate, route
 from corpusqa.query.synthesizer import CitedAnswer, synthesize
 
@@ -178,6 +180,23 @@ class QueryReport:
     unpriced_calls: dict[TaskName, int] = field(default_factory=dict)
 
 
+@contextlib.contextmanager
+def _record_outcome(results_file: ResultsWriter | None) -> Iterator[None]:
+    """Records in ``results_file`` how the enclosed run ended."""
+    if results_file is None:
+        yield
+        return
+    try:
+        yield
+    except (asyncio.CancelledError, BudgetExceededError) as exc:
+        results_file.finish("cancelled", str(exc) or "cancelled")
+        raise
+    except BaseException as exc:
+        results_file.finish("failed", f"{type(exc).__name__}: {exc}")
+        raise
+    results_file.finish("finished")
+
+
 async def run_query(
     corpus_root: Path,
     question: str,
@@ -193,6 +212,7 @@ async def run_query(
     on_file_result: Callable[[str, ExtractionResult], None] | None = None,
     confirm: Callable[[CostEstimate], bool] | None = None,
     client: LLMTaskClient | None = None,
+    results_file: ResultsWriter | None = None,
 ) -> QueryReport:
     """Answers a question over an indexed corpus.
 
@@ -225,6 +245,8 @@ async def run_query(
             LLM work to do.
         client: Injectable task client (M4-C1 test/eval seam); a real
             ``LLMTaskClient`` is constructed when omitted.
+        results_file: Records the run as it goes (each file's outcome, the
+            mode, the answer) and how it ended, including a cancel or error.
         confirm: Callback deciding whether to proceed at the given
             estimate; required when the estimate exceeds
             ``budget.confirm_above_usd``. None means non-interactive.
@@ -238,94 +260,102 @@ async def run_query(
         ProviderUnavailableError: A call failed in a way every later call
             would too (e.g. no model loaded); the run stops at that point.
     """
-    corpus_root = corpus_root.resolve()
-    _, db_path, cache_dir = index_paths(corpus_root)
-    if not db_path.exists():
-        raise CorpusQAError(
-            f"no index at {corpus_root}; run: corpusqa index {corpus_root}"
-        )
-    client = client or LLMTaskClient(config)
-    run_id = uuid.uuid4().hex[:12]
-
-    if all_files:
-        mode = "sweep"
-    question_hash = _question_hash(question, definition, relevance, config)
-
-    with CatalogStore(db_path) as store:
-        parseable = store.all_parseable_files()
-        if mode == "auto":
-            mode = (
-                "sweep" if len(parseable) <= config.query.sweep_threshold else "route"
+    with _record_outcome(results_file):
+        corpus_root = corpus_root.resolve()
+        _, db_path, cache_dir = index_paths(corpus_root)
+        if not db_path.exists():
+            raise CorpusQAError(
+                f"no index at {corpus_root}; run: corpusqa index {corpus_root}"
             )
-        candidates, card_report, pass1_usd = await _select_candidates(
-            mode,
-            question,
-            definition,
-            store,
-            parseable,
-            cache_dir,
-            client,
-            config,
-            confirm,
-        )
-        plan = _plan_pass2(
-            candidates, store, cache_dir, client, config, question_hash, use_cache
-        )
-        estimate = estimate_query(plan.section_tokens, config)
-        _check_budget_gate(
-            estimate, config, confirm, "extraction+synthesis", prior_usd=pass1_usd
-        )
+        client = client or LLMTaskClient(config)
+        run_id = uuid.uuid4().hex[:12]
 
-        _log.info(
-            "run=%s mode=%s candidates=%d relevance=%s calls=%d",
-            run_id,
-            mode,
-            len(candidates),
-            relevance,
-            plan.total_calls,
-        )
-        runner = _Pass2Runner(
-            plan=plan,
-            store=store,
-            client=client,
-            config=config,
-            question=question,
-            definition=definition,
-            relevance=relevance,
-            run_id=run_id,
-            question_hash=question_hash,
-            on_progress=on_progress,
-            on_file_result=on_file_result,
-        )
-        results = await runner.run(candidates)
-        store.prune_evaluations(config.query.eval_retention_runs)
-        _log.info(
-            "run=%s relevant=%d cached=%d failures=%d",
-            run_id,
-            sum(1 for _, r in results if r.relevant),
-            runner.cached,
-            len(runner.failures),
-        )
+        if all_files:
+            mode = "sweep"
+        question_hash = _question_hash(question, definition, relevance, config)
 
-        answer = (
-            await synthesize(question, results, client, config)
-            if synthesize_answer
-            else None
-        )
-        _record_costs(store, run_id, client, config)
-        return QueryReport(
-            answer=answer,
-            findings=results,
-            candidates=candidates,
-            relevant_files=[p for p, r in results if r.relevant],
-            estimate=estimate,
-            card_report=card_report,
-            extraction_failures=runner.failures,
-            actual_usage=client.usage_by_task(),
-            unpriced_calls=client.unpriced_by_task(),
-            mode=mode,
-            cached_evaluations=runner.cached,
-        )
+        with CatalogStore(db_path) as store:
+            parseable = store.all_parseable_files()
+            if mode == "auto":
+                mode = (
+                    "sweep"
+                    if len(parseable) <= config.query.sweep_threshold
+                    else "route"
+                )
+            if results_file is not None:
+                results_file.set_mode(mode)
+            candidates, card_report, pass1_usd = await _select_candidates(
+                mode,
+                question,
+                definition,
+                store,
+                parseable,
+                cache_dir,
+                client,
+                config,
+                confirm,
+            )
+            plan = _plan_pass2(
+                candidates, store, cache_dir, client, config, question_hash, use_cache
+            )
+            estimate = estimate_query(plan.section_tokens, config)
+            _check_budget_gate(
+                estimate, config, confirm, "extraction+synthesis", prior_usd=pass1_usd
+            )
+
+            _log.info(
+                "run=%s mode=%s candidates=%d relevance=%s calls=%d",
+                run_id,
+                mode,
+                len(candidates),
+                relevance,
+                plan.total_calls,
+            )
+            runner = _Pass2Runner(
+                plan=plan,
+                store=store,
+                client=client,
+                config=config,
+                question=question,
+                definition=definition,
+                relevance=relevance,
+                run_id=run_id,
+                question_hash=question_hash,
+                on_progress=on_progress,
+                on_file_result=on_file_result,
+                results_file=results_file,
+            )
+            results = await runner.run(candidates)
+            store.prune_evaluations(config.query.eval_retention_runs)
+            _log.info(
+                "run=%s relevant=%d cached=%d failures=%d",
+                run_id,
+                sum(1 for _, r in results if r.relevant),
+                runner.cached,
+                len(runner.failures),
+            )
+
+            answer = (
+                await synthesize(question, results, client, config)
+                if synthesize_answer
+                else None
+            )
+            if answer is not None and results_file is not None:
+                results_file.set_answer(answer)
+            _record_costs(store, run_id, client, config)
+            return QueryReport(
+                answer=answer,
+                findings=results,
+                candidates=candidates,
+                relevant_files=[p for p, r in results if r.relevant],
+                estimate=estimate,
+                card_report=card_report,
+                extraction_failures=runner.failures,
+                actual_usage=client.usage_by_task(),
+                unpriced_calls=client.unpriced_by_task(),
+                mode=mode,
+                cached_evaluations=runner.cached,
+            )
 
 
 def _token_counts(sections: list[str], client: LLMTaskClient) -> list[int]:
@@ -453,6 +483,7 @@ class _Pass2Runner:
     question_hash: str
     on_progress: Callable[[int, int], None] | None
     on_file_result: Callable[[str, ExtractionResult], None] | None = None
+    results_file: ResultsWriter | None = None
     failures: list[tuple[str, str]] = field(default_factory=list)
     cached: int = 0
     _calls_done: int = 0
@@ -506,9 +537,16 @@ class _Pass2Runner:
             # Show what survived, but report the file and never cache it.
             self.failures.append((cand.file.rel_path, str(exc)))
             result = exc.result
+            if self.results_file is not None:
+                self.results_file.add_file(cand.file.rel_path, h, result, str(exc))
         except CorpusQAError as exc:
             self.failures.append((cand.file.rel_path, str(exc)))
+            if self.results_file is not None:
+                self.results_file.add_file(cand.file.rel_path, h, None, str(exc))
             return None
+        else:
+            if self.results_file is not None:
+                self.results_file.add_file(cand.file.rel_path, h, result)
         finally:
             # If the file ended before all its planned sections ticked (e.g. a
             # section raised), credit the remainder so the bar still reaches

@@ -212,3 +212,45 @@ def test_gui_keyboard_interrupt_returns_130(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(shutil, "which", lambda _: "/fake/npm")
     monkeypatch.setattr(subprocess, "run", interrupted)
     assert main(["gui"]) == 130
+
+
+def test_query_save_writes_results_file(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    import pytest
+
+    import corpusqa.cli.main as cli
+    from corpusqa.catalog.summarizer import CardReport
+    from corpusqa.ingest.pipeline import index_paths
+    from corpusqa.query.budget import CostEstimate
+    from corpusqa.query.pipeline import QueryReport
+    from corpusqa.query.results_file import load_results
+
+    mp = monkeypatch
+    assert isinstance(mp, pytest.MonkeyPatch) and isinstance(
+        capsys, pytest.CaptureFixture
+    )
+    index_dir, db, _ = index_paths(tmp_path.resolve())
+    index_dir.mkdir()
+    db.write_bytes(b"")
+    seen: dict[str, object] = {}
+
+    async def fake_run_query(*_: object, **kw: object) -> QueryReport:
+        seen["results_file"] = kw["results_file"]
+        return QueryReport(
+            answer=None,
+            candidates=[],
+            relevant_files=[],
+            estimate=CostEstimate(),
+            card_report=CardReport(),
+        )
+
+    mp.setattr(cli, "run_query", fake_run_query)
+    mp.setattr(cli, "_warn_drift", lambda *_: None)
+    argv = ["query", "q?", str(tmp_path), "--config", EXAMPLE, "--yes", "--save"]
+    assert cli.main(argv) == cli.EXIT_OK
+    writer = seen["results_file"]
+    assert writer is not None
+    path = writer.path  # type: ignore[attr-defined]
+    assert load_results(path).question == "q?"
+    assert f"results saved to {path}" in capsys.readouterr().err

@@ -55,6 +55,12 @@ export class ReaderView {
     els.file.title = row.rel_path;
     els.page.textContent = row.page_label ? `p. ${row.page_label}` : '';
     els.notice.hidden = true;
+    if (row.source === 'missing') {
+      this.view = null;
+      clear(els.doc);
+      els.doc.append(h('p', { class: 'empty', text: `${row.rel_path} is no longer in the corpus index, so it cannot be shown.` }));
+      return;
+    }
     let doc;
     try {
       doc = await this._doc(this.getFolder(), row.rel_path);
@@ -69,9 +75,14 @@ export class ReaderView {
     const text = doc.markdown;
     const pageMap = doc.page_map || [];
     // Finding offsets are Python code-point indices; convert to UTF-16.
-    const target = readerTarget(row);
+    // A saved run's offsets only apply to the text it was judged against.
+    const changed = row.source === 'changed';
+    const target = changed ? { offset: null, notice: null } : readerTarget(row);
     if (target.offset !== null) target.offset = doc.toUnit(target.offset);
-    if (target.notice) {
+    if (changed) {
+      els.notice.textContent = 'This document has changed since these results were saved, so the quote cannot be placed. Showing the start of the current document.';
+      els.notice.hidden = false;
+    } else if (target.notice) {
       els.notice.textContent = `${target.notice}. Showing the start of the document; the quote may be paraphrased.`;
       els.notice.hidden = false;
     }

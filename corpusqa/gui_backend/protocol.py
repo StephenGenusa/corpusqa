@@ -79,6 +79,18 @@ class DocGetParams(_Strict):
     rel_path: str
 
 
+class ResultsListParams(_Strict):
+    """``results.list``: the corpus whose saved results to list."""
+
+    folder: str
+
+
+class ResultsLoadParams(_Strict):
+    """``results.load``: the results file to open."""
+
+    path: str
+
+
 class NoticeEvent(_Strict):
     """Informational message; the run continues."""
 
@@ -153,6 +165,7 @@ class DoneEvent(_Strict):
     failures: list[tuple[str, str]] = Field(default_factory=list)
     answer: str | None = None
     cancelled: bool = False
+    results_path: str | None = None
 
 
 class ErrorEvent(_Strict):

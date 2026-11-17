@@ -62,6 +62,8 @@ from corpusqa.gui_backend.protocol import (
     NoticeEvent,
     ProgressEvent,
     Request,
+    ResultsListParams,
+    ResultsLoadParams,
     RunStartParams,
 )
 from corpusqa.ingest.pipeline import index_paths, run_index
@@ -71,6 +73,11 @@ from corpusqa.logging_setup import run_log_file
 from corpusqa.query.budget import CostEstimate
 from corpusqa.query.extractor import ExtractionResult
 from corpusqa.query.pipeline import _load_page_map, run_query
+from corpusqa.query.results_file import (
+    ResultsWriter,
+    list_results,
+    load_results,
+)
 
 _log = logging.getLogger("corpusqa.gui_backend")
 
@@ -187,7 +194,52 @@ def _read_doc(folder: str, rel_path: str) -> dict[str, object]:
     page_map = [
         [offset, label] for offset, label in _load_page_map(cache_dir, file_hash)
     ]
-    return {"markdown": markdown, "page_map": page_map}
+    return {"markdown": markdown, "page_map": page_map, "file_hash": file_hash}
+
+
+def _list_saved(folder: str) -> dict[str, object]:
+    return {
+        "results": [
+            {
+                "path": str(s.path),
+                "question": s.question,
+                "started_at": s.started_at,
+                "outcome": s.outcome,
+                "files": s.files,
+                "findings": s.findings,
+            }
+            for s in list_results(Path(folder))
+        ]
+    }
+
+
+def _load_saved(path: str) -> dict[str, object]:
+    """Loads a results file and says, per file, whether its source still matches.
+
+    ``sources`` maps each saved file to ``same`` (offsets still apply),
+    ``changed`` (the source was reconverted with different content) or
+    ``missing`` (not in the corpus index any more, or no index at all).
+    """
+    run = load_results(Path(path))
+    db_path = index_paths(Path(run.corpus))[1]
+    known: dict[str, str] = {}
+    if db_path.exists():
+        try:
+            with CatalogStore(db_path) as store:
+                known = store.known_files()
+        except sqlite3.Error as exc:
+            _log.warning("cannot read index for %s: %s", run.corpus, exc)
+    sources = {
+        f.rel_path: (
+            "missing"
+            if f.rel_path not in known
+            else "same"
+            if known[f.rel_path] == f.file_hash
+            else "changed"
+        )
+        for f in run.files
+    }
+    return {"run": run.model_dump(), "sources": sources}
 
 
 class Server:
@@ -230,6 +282,7 @@ class Server:
         self._tasks: set[asyncio.Task[None]] = set()
         # run state (written on the loop; read by the reader thread)
         self._run_task: asyncio.Task[None] | None = None
+        self._results_file: ResultsWriter | None = None
         self._run_active = False
         self._phase = "idle"
         self._cancel = threading.Event()
@@ -379,6 +432,8 @@ class Server:
             "models.list": self._models_list,
             "run.start": self._run_start,
             "doc.get": self._doc_get,
+            "results.list": self._results_list,
+            "results.load": self._results_load,
         }
         handler = handlers.get(request.cmd)
         if handler is None:
@@ -434,6 +489,14 @@ class Server:
             await asyncio.to_thread(_read_doc, params.folder, params.rel_path),
         )
 
+    async def _results_list(self, request: Request) -> None:
+        params = ResultsListParams.model_validate(request.params)
+        self._reply(request.id, await asyncio.to_thread(_list_saved, params.folder))
+
+    async def _results_load(self, request: Request) -> None:
+        params = ResultsLoadParams.model_validate(request.params)
+        self._reply(request.id, await asyncio.to_thread(_load_saved, params.path))
+
     async def _run_start(self, request: Request) -> None:
         params = RunStartParams.model_validate(request.params)
         if self._run_active:
@@ -459,6 +522,7 @@ class Server:
         self, params: RunStartParams, config: AppConfig, run_id: str
     ) -> None:
         done = DoneEvent()
+        self._results_file = None
         try:
             done = await self._execute(params, config, run_id)
         except asyncio.CancelledError:
@@ -479,6 +543,16 @@ class Server:
             self.emit(ErrorEvent(message=f"{type(exc).__name__}: {exc}"))
         if self._cancel.is_set():
             done = done.model_copy(update={"cancelled": True})
+        saved = self._results_file
+        if saved is not None:
+            if saved.write_error:
+                self.emit(
+                    NoticeEvent(
+                        message=f"Could not save the results file: {saved.write_error}"
+                    )
+                )
+            else:
+                done = done.model_copy(update={"results_path": str(saved.path)})
         self._run_task = None
         self._phase = "idle"
         self._run_active = False
@@ -532,6 +606,14 @@ class Server:
                 self._phase = "querying"
 
         client = self._client_factory(config) if self._client_factory else None
+        self._results_file = ResultsWriter.create(
+            folder,
+            question=params.question,
+            definition=params.definition or None,
+            relevance=params.relevance,
+            mode=params.mode,
+            config=config,
+        )
         result = await run_query(
             folder,
             params.question,
@@ -545,6 +627,7 @@ class Server:
             on_file_result=self._file_result,
             confirm=lambda estimate: self._confirm(run_id, estimate),
             client=client,
+            results_file=self._results_file,
         )
         return DoneEvent(
             failures=[*result.card_report.failed, *result.extraction_failures],

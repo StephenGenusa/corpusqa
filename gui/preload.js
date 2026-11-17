@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('corpusqa', {
   },
   /** Opens a folder picker; resolves to a path or null. */
   pickFolder: (defaultPath) => ipcRenderer.invoke('pick-folder', defaultPath || ''),
+  /** Opens a results-file picker; resolves to a path or null. */
+  pickResultsFile: (defaultPath) => ipcRenderer.invoke('pick-results-file', defaultPath || ''),
   /** Resolves to `{running, lastExit: {code, signal, stderrTail} | null}`. */
   backendStatus: () => ipcRenderer.invoke('backend-status'),
   /** Stops (if needed) and restarts the backend process. */

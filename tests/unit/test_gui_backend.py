@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 
+from corpusqa.config import load_config
 from corpusqa.config.schema import ProviderConfig, TaskName
 from corpusqa.gui_backend.models import ModelInfo, ModelListing
 from corpusqa.gui_backend.server import Server
@@ -265,6 +266,7 @@ def test_run_streams_progress_results_and_done(
     finding = fr["findings"][0]
     assert finding["start"] is not None and finding["verified"] is True
     assert finding["quote"] == QUOTE and finding["page_label"] == "1"
+    assert done.pop("results_path").endswith("-what-ideas-exist.json")
     assert done == {
         "event": "done",
         "failures": [],
@@ -952,3 +954,65 @@ def test_lm_studio_preflight_skips_unused_tasks(
     h.send(_start(md_corpus, mode="sweep"))
     assert h.event("done")["cancelled"] is False
     assert not [e for e in h.events() if e["event"] in ("error", "notice")]
+
+
+def test_run_saves_a_results_file_and_reports_its_path(
+    md_corpus: Path, tmp_path: Path, harness: Callable[..., Harness]
+) -> None:
+    fake = FakeClient({TaskName.EXTRACT: [_extraction()]})
+    h = harness(_write_config(tmp_path), client=fake)
+    h.send(_start(md_corpus, definition="community food"))
+    done = h.event("done")
+    path = Path(done["results_path"])
+    assert path.parent == md_corpus / ".corpusqa" / "results"
+
+    h.send({"id": "l", "cmd": "results.list", "params": {"folder": str(md_corpus)}})
+    listed = h.reply("l")["result"]["results"]
+    assert [r["path"] for r in listed] == [str(path)]
+    assert listed[0]["outcome"] == "finished" and listed[0]["findings"] == 1
+
+    h.send({"id": "o", "cmd": "results.load", "params": {"path": str(path)}})
+    loaded = h.reply("o")["result"]
+    run = loaded["run"]
+    assert run["question"] == "what ideas exist?"
+    assert run["definition"] == "community food"
+    assert run["files"][0]["findings"][0]["quote"] == QUOTE
+    assert loaded["sources"] == {"gardens.md": "same"}
+
+    h.send(
+        {
+            "id": "d",
+            "cmd": "doc.get",
+            "params": {"folder": str(md_corpus), "rel_path": "gardens.md"},
+        }
+    )
+    assert h.reply("d")["result"]["file_hash"] == run["files"][0]["file_hash"]
+
+
+def test_results_load_flags_changed_and_missing_sources(
+    md_corpus: Path, tmp_path: Path, harness: Callable[..., Harness]
+) -> None:
+    (md_corpus / "rivers.md").write_text("# Rivers\n\nRivers run.\n", encoding="utf-8")
+    fake = FakeClient({TaskName.EXTRACT: [_extraction(), _extraction(relevant=False)]})
+    h = harness(_write_config(tmp_path), client=fake)
+    h.send(_start(md_corpus))
+    path = h.event("done")["results_path"]
+    # One source edited, one deleted, then the corpus reconverted.
+    (md_corpus / "gardens.md").write_text("# Garden\n\nChanged.\n", encoding="utf-8")
+    (md_corpus / "rivers.md").unlink()
+    pipeline.run_index(md_corpus, load_config(_write_config(tmp_path)))
+    h.send({"id": "o", "cmd": "results.load", "params": {"path": path}})
+    assert h.reply("o")["result"]["sources"] == {
+        "gardens.md": "changed",
+        "rivers.md": "missing",
+    }
+
+
+def test_results_load_reports_a_bad_file(
+    tmp_path: Path, harness: Callable[..., Harness]
+) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text("{}", encoding="utf-8")
+    h = harness(_write_config(tmp_path), client=FakeClient({}))
+    h.send({"id": "o", "cmd": "results.load", "params": {"path": str(bad)}})
+    assert "not a corpusqa results file" in h.reply("o")["error"]
