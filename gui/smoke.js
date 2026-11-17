@@ -4,7 +4,8 @@
 // It drives the real renderer through the main workflow, writes a JSON
 // summary to CORPUSQA_SMOKE_OUT and quits. Inputs: CORPUSQA_SMOKE_FOLDER,
 // CORPUSQA_SMOKE_QUESTION, CORPUSQA_SMOKE_MODEL; optional CORPUSQA_SMOKE_SHOTS
-// (a directory for screenshots).
+// (a directory for screenshots) and CORPUSQA_SMOKE_MODEL_ONLY=1 (stop after
+// choosing the model, before any run).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -60,15 +61,36 @@ async function run(win, quit) {
     })`);
     await shot('0-ready');
 
-    // Top bar: model applies to all four tasks.
-    await setInput('#model', env.CORPUSQA_SMOKE_MODEL);
+    // Top bar: model applies to all four tasks. Pick it from the dropdown
+    // when the provider lists it, else type it via "Other".
+    await wait(`[...document.querySelectorAll('#model option')].some(o => o.value === '__other__')`, 15000, 'model list');
+    summary.steps.modelList = await js(`({
+      options: document.querySelectorAll('#model option').length,
+      first: [...document.querySelectorAll('#model option')].slice(0, 4).map(o => o.textContent),
+      selected: document.getElementById('model').selectedOptions[0]?.textContent ?? null,
+      error: document.getElementById('model-error').hidden ? null : document.getElementById('model-error').textContent,
+    })`);
+    await shot('0b-model-list');
+    const want = env.CORPUSQA_SMOKE_MODEL;
+    const listed = await js(`[...document.querySelectorAll('#model option')].some(o => o.value === ${JSON.stringify(want)})`);
+    if (listed) {
+      await setInput('#model', want);
+    } else {
+      await setInput('#model', '__other__');
+      await setInput('#model-custom', want);
+    }
     await sleep(1500);
-    await wait(`document.querySelectorAll('#model-list option').length > 0 || !document.getElementById('model-error').hidden`, 10000, 'model list');
     summary.steps.model = await js(`({
-      listed: document.querySelectorAll('#model-list option').length,
+      viaList: ${listed},
+      value: document.getElementById('model').value,
+      custom: document.getElementById('model-custom').value,
       mixed: !document.getElementById('mixed').hidden,
       error: document.getElementById('model-error').hidden ? null : document.getElementById('model-error').textContent,
     })`);
+    if (env.CORPUSQA_SMOKE_MODEL_ONLY === '1') {
+      summary.ok = true;
+      return;
+    }
 
     // Run options: synthesize on, cache off (so the run really reads).
     await js(`(() => { const boxes = document.querySelectorAll('#drawer input[type=checkbox]');
@@ -198,9 +220,10 @@ async function run(win, quit) {
     summary.ok = true;
   } catch (err) {
     summary.error = String(err && err.stack ? err.stack : err);
+  } finally {
+    if (env.CORPUSQA_SMOKE_OUT) fs.writeFileSync(env.CORPUSQA_SMOKE_OUT, JSON.stringify(summary, null, 2));
+    quit();
   }
-  if (env.CORPUSQA_SMOKE_OUT) fs.writeFileSync(env.CORPUSQA_SMOKE_OUT, JSON.stringify(summary, null, 2));
-  quit();
 }
 
 module.exports = { run };

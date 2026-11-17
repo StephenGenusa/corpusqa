@@ -183,6 +183,8 @@ button.primary:hover:not(:disabled) { background: var(--accent); filter: brightn
 .topbar .row:not(:first-child) { padding-left: 46px; }
 .row-models .field:first-child { width: 300px; }
 .field-model { width: 400px; }
+.field-model select { flex: 1; min-width: 0; }
+.model-custom { width: 280px; }
 .topbar .field-model .label { width: auto; }
 .topbar .row-def { padding-right: 102px; }
 

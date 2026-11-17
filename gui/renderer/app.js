@@ -6,11 +6,12 @@ import { ReaderView } from './reader-view.js';
 import { SettingsDrawer } from './settings.js';
 
 const TASK_NAMES = ['catalog_summarize', 'query_route', 'extract', 'synthesize'];
+const { OTHER, modelOptions } = window.CorpusModelOptions;
 const $ = (id) => document.getElementById(id);
 
 const els = {
   folder: $('folder'), browse: $('browse'), question: $('question'), definition: $('definition'),
-  provider: $('provider'), model: $('model'), modelList: $('model-list'), mixed: $('mixed'),
+  provider: $('provider'), model: $('model'), modelCustom: $('model-custom'), modelRefresh: $('model-refresh'), mixed: $('mixed'),
   modelError: $('model-error'), run: $('run'), cancel: $('cancel'),
   statusText: $('status-text'), barFill: $('bar-fill'),
   errorPanel: $('error-panel'), errorMessage: $('error-message'), errorTail: $('error-tail'),
@@ -66,23 +67,49 @@ function applyConfig(config) {
   for (const name of Object.keys(config.providers)) {
     els.provider.append(h('option', { value: name, text: name, selected: name === extract.provider }));
   }
-  els.model.value = extract.model;
   els.mixed.hidden = !mixed;
-  fillModelList(extract.provider);
+  showCustom(false);
+  fillModelList(extract.provider, extract.model);
 }
 
-async function fillModelList(provider, refresh = false) {
+function setModelOptions(options) {
+  clear(els.model);
+  for (const o of options) {
+    els.model.append(h('option', { value: o.value, text: o.text, selected: o.selected, disabled: o.disabled }));
+  }
+}
+
+async function fillModelList(provider, wanted, refresh = false) {
+  // Show the configured model at once; the provider's list replaces it.
+  setModelOptions([{ value: wanted, text: wanted ? `${wanted} — loading list…` : 'Loading models…',
+    selected: true, disabled: !wanted }]);
   const listing = await getModels(provider, { refresh });
   if (els.provider.value !== provider) return;
-  clear(els.modelList);
-  for (const m of listing.models) {
-    let label = '';
-    if (m.loaded === true) label = m.loaded_context ? `loaded · ${fmtInt(m.loaded_context)} ctx` : 'loaded';
-    else if (m.loaded === false) label = 'not loaded';
-    else if (m.max_context) label = `${fmtInt(m.max_context)} ctx`;
-    els.modelList.append(h('option', { value: m.id, label: label || null }));
+  const { options, listed } = modelOptions(listing, wanted);
+  setModelOptions(options);
+  if (listing.error) {
+    showModelError(`Model list unavailable: ${listing.error}. Choose "Other" to type a model name.`);
+  } else if (!listed) {
+    showModelError(`${wanted} is not in ${provider}'s model list. Choose a model from the list.`);
+  } else {
+    showModelError(null);
   }
-  showModelError(listing.error ? `Model list unavailable: ${listing.error}. You can still type a model name.` : null);
+}
+
+/** Re-reads the provider's model list, keeping the current choice. */
+function refreshModels() {
+  if (state.running || !state.config || els.model.value === OTHER) return;
+  fillModelList(els.provider.value, els.model.value, true);
+}
+
+function showCustom(show) {
+  els.modelCustom.hidden = !show;
+  if (!show) els.modelCustom.value = '';
+}
+
+/** The model the top bar currently names ('' if none). */
+function selectedModel() {
+  return els.model.value === OTHER ? els.modelCustom.value.trim() : els.model.value;
 }
 
 function showModelError(message) {
@@ -98,7 +125,7 @@ async function saveSelection() {
   if (!state.config) return false;
   if (!state.selectionDirty) return true;
   const provider = els.provider.value;
-  const model = els.model.value.trim();
+  const model = selectedModel();
   if (!model) {
     showModelError('Choose or type a model.');
     return false;
@@ -129,16 +156,29 @@ async function saveSelection() {
 
 els.provider.addEventListener('change', () => {
   state.selectionDirty = true;
-  els.model.value = '';
-  fillModelList(els.provider.value, true);
+  showCustom(false);
+  fillModelList(els.provider.value, '', true);
   els.model.focus();
-});
-els.model.addEventListener('input', () => {
-  state.selectionDirty = true;
 });
 els.model.addEventListener('change', () => {
   state.selectionDirty = true;
-  if (els.model.value.trim()) saveSelection();
+  if (els.model.value === OTHER) {
+    showCustom(true);
+    els.modelCustom.focus();
+    return;
+  }
+  showCustom(false);
+  if (els.model.value) saveSelection();
+});
+els.modelRefresh.addEventListener('click', refreshModels);
+// Loading a model in LM Studio happens in another window; pick it up on return.
+window.addEventListener('focus', refreshModels);
+els.modelCustom.addEventListener('input', () => {
+  state.selectionDirty = true;
+});
+els.modelCustom.addEventListener('change', () => {
+  state.selectionDirty = true;
+  if (els.modelCustom.value.trim()) saveSelection();
 });
 
 async function loadConfig() {
@@ -234,6 +274,8 @@ function setRunning(running) {
   els.browse.disabled = running;
   els.provider.disabled = running;
   els.model.disabled = running;
+  els.modelCustom.disabled = running;
+  els.modelRefresh.disabled = running;
   clearInterval(state.timer);
   state.timer = running ? setInterval(() => setStatus(state.phase, state.fraction), 1000) : null;
 }

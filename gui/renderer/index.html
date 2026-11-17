@@ -44,9 +44,12 @@
       <label class="field field-model">
         <span class="label">Model <span id="mixed" class="badge badge-muted" hidden
               title="The four tasks use different models; this shows the extract model">mixed</span></span>
-        <input id="model" type="text" list="model-list" spellcheck="false" autocomplete="off">
-        <datalist id="model-list"></datalist>
+        <select id="model" aria-label="Model"></select>
       </label>
+      <button id="model-refresh" class="icon-btn" type="button" aria-label="Refresh model list"
+              title="Refresh the model list (e.g. after loading a model in LM Studio)">&#x21bb;</button>
+      <input id="model-custom" type="text" class="model-custom" spellcheck="false" autocomplete="off"
+             aria-label="Model name" placeholder="LiteLLM model, e.g. lm_studio/qwen3-32b" hidden>
       <div class="status" role="status" aria-live="polite">
         <div class="bar" aria-hidden="true"><div id="bar-fill" class="bar-fill"></div></div>
         <span id="status-text">Ready</span>
@@ -105,6 +108,7 @@
   </dialog>
 
   <script src="../src/reader.js"></script>
+  <script src="../src/model-options.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>
