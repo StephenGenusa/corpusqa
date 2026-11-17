@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from corpusqa import splitting
 from corpusqa.config.schema import AppConfig, TaskName
-from corpusqa.errors import CorpusQAError
+from corpusqa.errors import CorpusQAError, ProviderUnavailableError
 from corpusqa.llm.structured import complete_structured, schema_instruction
 from corpusqa.llm.tasks import Completion, LLMTaskClient
 from corpusqa.prompts import common as common_prompt
@@ -532,6 +532,8 @@ async def extract_file(
                 on_completion=on_completion,
                 on_malformed=lambda: malformed.append(None),
             )
+        except ProviderUnavailableError:
+            raise  # every remaining section would fail the same way
         except CorpusQAError as exc:
             # One section's structured-output failure (e.g. a truncated JSON
             # the salvage could not recover) must not discard the whole file's

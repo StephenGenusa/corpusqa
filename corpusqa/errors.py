@@ -21,6 +21,15 @@ class LLMError(CorpusQAError):
     """An LLM call failed after retries/fallbacks were exhausted."""
 
 
+class ProviderUnavailableError(LLMError):
+    """The provider rejected a call in a way no retry or other input can fix.
+
+    Examples: no model loaded (LM Studio), bad credentials, unknown model, or
+    a server that stays unreachable after retries. Every later call of the
+    run would fail the same way, so the run stops instead of continuing.
+    """
+
+
 class StructuredOutputError(LLMError):
     """Model output failed schema validation after the repair attempt.
 

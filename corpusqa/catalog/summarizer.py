@@ -10,9 +10,9 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict, Field
 
 from corpusqa.config.schema import AppConfig, TaskName
-from corpusqa.errors import CorpusQAError
+from corpusqa.errors import CorpusQAError, ProviderUnavailableError
 from corpusqa.llm.structured import complete_structured
-from corpusqa.llm.tasks import LLMTaskClient
+from corpusqa.llm.tasks import LLMTaskClient, gather_or_stop
 from corpusqa.splitting import input_token_budget, split_within_token_budget
 
 if TYPE_CHECKING:  # store imports CatalogCard from here; avoid a cycle
@@ -183,6 +183,10 @@ async def generate_cards(
 
     Returns:
         A per-run report; per-file failures are captured, not raised.
+
+    Raises:
+        ProviderUnavailableError: A call failed in a way every other card's
+            call would too (e.g. no model loaded); remaining cards stop.
     """
     pending = store.files_needing_cards()
     report = CardReport()
@@ -212,8 +216,10 @@ async def generate_cards(
                 config.tasks[TaskName.CATALOG_SUMMARIZE].model,
             )
             report.generated += 1
+        except ProviderUnavailableError:
+            raise  # every other card would fail the same way
         except (CorpusQAError, OSError) as exc:
             report.failed.append((row.rel_path, str(exc)))
 
-    await asyncio.gather(*(one(r) for r in pending))
+    await gather_or_stop([one(r) for r in pending])
     return report

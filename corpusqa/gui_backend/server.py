@@ -588,7 +588,20 @@ class Server:
             model = _bare_model(task.model)
             want = task.context_window
             info = next((m for m in listing.models if _bare_model(m.id) == model), None)
-            if info is not None and info.loaded:
+            if info is None:
+                raise _PreflightError(
+                    f"LM Studio has no chat model named {model}. Pick a model "
+                    "from the Model list (draft/assistant models cannot answer)."
+                )
+            if info.loaded is False:
+                # Without just-in-time loading LM Studio rejects every request
+                # with "No models loaded"; a run would fail all its sections.
+                raise _PreflightError(
+                    f"{model} is not loaded in LM Studio. Load it (Developer "
+                    f"tab, or: lms load {model}) with a context length of at "
+                    f"least {want}, then run again."
+                )
+            if info.loaded:
                 have = info.loaded_context
                 if have is not None and have < want:
                     raise _PreflightError(
@@ -598,13 +611,14 @@ class Server:
                         f"{want}, or lower Context window in Settings."
                     )
             elif (model, want) not in noticed:
+                # Load state unknown (an LM Studio without /api/v0).
                 noticed.add((model, want))
                 self.emit(
                     NoticeEvent(
                         message=(
-                            f"LM Studio will load {model} on first request using "
-                            "its default context length; make sure it is at "
-                            f"least {want}."
+                            f"LM Studio did not report whether {model} is "
+                            "loaded; make sure it is, with a context length of "
+                            f"at least {want}."
                         )
                     )
                 )

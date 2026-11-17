@@ -13,13 +13,15 @@ import contextlib
 import io
 import logging
 import os
+from collections.abc import Awaitable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
 import litellm
+from litellm import exceptions as litellm_errors
 
 from corpusqa.config.schema import AppConfig, TaskConfig, TaskName, provider_kind
-from corpusqa.errors import LLMError
+from corpusqa.errors import LLMError, ProviderUnavailableError
 from corpusqa.llm.pricing import cost_map_rate, task_rate
 
 _NUM_RETRIES = 3
@@ -31,6 +33,57 @@ _PLACEHOLDER_KEY = "not-needed"
 _KEYLESS_KINDS = ("openai_compatible", "lm_studio")
 _OLLAMA_PREFIXES = ("ollama/", "ollama_chat/")
 _log = logging.getLogger("corpusqa.llm")
+
+
+# LiteLLM errors that every later call of the run would hit too.
+_RUN_FATAL_ERRORS: tuple[type[Exception], ...] = (
+    litellm_errors.AuthenticationError,
+    litellm_errors.PermissionDeniedError,
+    litellm_errors.NotFoundError,
+    litellm_errors.APIConnectionError,
+)
+# A 400 is normally specific to one request (e.g. context overflow); LM
+# Studio's "no model loaded" 400 is the exception.
+_RUN_FATAL_BAD_REQUEST = ("no models loaded",)
+
+
+_T = TypeVar("_T")
+
+
+async def gather_or_stop(aws: list[Awaitable[_T]]) -> list[_T]:
+    """Awaits ``aws`` concurrently; a ProviderUnavailableError cancels the rest.
+
+    ``asyncio.gather`` alone leaves the other awaitables running after the
+    first exception; here they would all fail the same way, so they are
+    cancelled before the error propagates.
+
+    Args:
+        aws: Coroutines or futures to run.
+
+    Returns:
+        Their results, in order.
+
+    Raises:
+        ProviderUnavailableError: The first one raised by any awaitable.
+    """
+    tasks = [asyncio.ensure_future(a) for a in aws]
+    try:
+        return list(await asyncio.gather(*tasks))
+    except ProviderUnavailableError:
+        for t in tasks:
+            t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        raise
+
+
+def _is_run_fatal(exc: Exception) -> bool:
+    """Returns True if ``exc`` means no call of this run can succeed."""
+    if isinstance(exc, _RUN_FATAL_ERRORS):
+        return True
+    if isinstance(exc, litellm_errors.BadRequestError):
+        text = str(exc).lower()
+        return any(marker in text for marker in _RUN_FATAL_BAD_REQUEST)
+    return False
 
 
 @dataclass(frozen=True)
@@ -222,6 +275,10 @@ class LLMTaskClient:
             try:
                 response = await litellm.acompletion(**kwargs)
             except Exception as exc:
+                if _is_run_fatal(exc):
+                    raise ProviderUnavailableError(
+                        f"task '{task.value}' cannot run on {task_cfg.model}: {exc}"
+                    ) from exc
                 raise LLMError(f"task '{task.value}' failed: {exc}") from exc
         usage = getattr(response, "usage", None)
         t_in = int(getattr(usage, "prompt_tokens", 0) or 0)

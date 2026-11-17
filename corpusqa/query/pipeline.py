@@ -7,7 +7,6 @@ interactive confirmation. Costs are aggregated per task and recorded to
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import hashlib
 import json
@@ -20,9 +19,13 @@ from pathlib import Path
 from corpusqa.catalog.store import CatalogStore, FileRow
 from corpusqa.catalog.summarizer import CardReport, generate_cards
 from corpusqa.config.schema import AppConfig, TaskName
-from corpusqa.errors import BudgetExceededError, CorpusQAError
+from corpusqa.errors import (
+    BudgetExceededError,
+    CorpusQAError,
+    ProviderUnavailableError,
+)
 from corpusqa.ingest.pipeline import index_paths
-from corpusqa.llm.tasks import Completion, LLMTaskClient
+from corpusqa.llm.tasks import Completion, LLMTaskClient, gather_or_stop
 from corpusqa.query.budget import CostEstimate, estimate_pass1, estimate_query
 from corpusqa.query.extractor import (
     ExtractionResult,
@@ -231,6 +234,8 @@ async def run_query(
     Raises:
         BudgetExceededError: Estimate over threshold and not confirmed.
         CorpusQAError: For corpus-level failures (no index, no cards).
+        ProviderUnavailableError: A call failed in a way every later call
+            would too (e.g. no model loaded); the run stops at that point.
     """
     corpus_root = corpus_root.resolve()
     _, db_path, cache_dir = index_paths(corpus_root)
@@ -458,7 +463,7 @@ class _Pass2Runner:
         """Extracts every candidate; returns results for those that produced one."""
         # Show the bar at 0/total before work starts so the user sees scope.
         self._report_progress()
-        gathered = await asyncio.gather(*(self._one(c) for c in candidates))
+        gathered = await gather_or_stop([self._one(c) for c in candidates])
         return [g for g in gathered if g is not None]
 
     def _report_progress(self) -> None:
@@ -482,6 +487,8 @@ class _Pass2Runner:
                 self.cached += 1
             else:
                 result = await self._extract(cand)
+        except ProviderUnavailableError:
+            raise  # stops the whole run (see run())
         except PartialExtractionError as exc:
             # Show what survived, but report the file and never cache it.
             self.failures.append((cand.file.rel_path, str(exc)))

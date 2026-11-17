@@ -509,19 +509,51 @@ def test_lm_studio_context_too_small_errors_before_work(
     assert not any(e["event"] == "progress" for e in events)
 
 
-def test_lm_studio_model_not_loaded_emits_notice_and_runs(
-    md_corpus: Path, tmp_path: Path, harness: Callable[..., Harness]
-) -> None:
-    cfg = _write_config(
+def _lms_cfg(tmp_path: Path) -> Path:
+    return _write_config(
         tmp_path,
         extract_provider="lms",
         extract_model="lm_studio/qwen",
         extract_context=16384,
         extra_providers=_LM,
     )
+
+
+def test_lm_studio_model_not_loaded_errors_before_work(
+    md_corpus: Path, tmp_path: Path, harness: Callable[..., Harness]
+) -> None:
     listing = ModelListing(models=[ModelInfo(id="lm_studio/qwen", loaded=False)])
+    fake = FakeClient({})
+    h = harness(_lms_cfg(tmp_path), client=fake, list_models_fn=_lm_listing(listing))
+    h.send(_start(md_corpus))
+    h.event("done")
+    events = h.events()
+    assert events[0]["event"] == "error"
+    assert "not loaded" in events[0]["message"] and "16384" in events[0]["message"]
+    assert not any(e["event"] == "progress" for e in events)
+    assert not fake.calls
+
+
+def test_lm_studio_model_missing_errors_before_work(
+    md_corpus: Path, tmp_path: Path, harness: Callable[..., Harness]
+) -> None:
+    listing = ModelListing(models=[ModelInfo(id="lm_studio/other", loaded=True)])
+    h = harness(
+        _lms_cfg(tmp_path), client=FakeClient({}), list_models_fn=_lm_listing(listing)
+    )
+    h.send(_start(md_corpus))
+    h.event("done")
+    events = h.events()
+    assert events[0]["event"] == "error" and "qwen" in events[0]["message"]
+    assert not any(e["event"] == "progress" for e in events)
+
+
+def test_lm_studio_unknown_load_state_emits_notice_and_runs(
+    md_corpus: Path, tmp_path: Path, harness: Callable[..., Harness]
+) -> None:
+    listing = ModelListing(models=[ModelInfo(id="lm_studio/qwen")])
     fake = FakeClient({TaskName.EXTRACT: [_extraction()]})
-    h = harness(cfg, client=fake, list_models_fn=_lm_listing(listing))
+    h = harness(_lms_cfg(tmp_path), client=fake, list_models_fn=_lm_listing(listing))
     h.send(_start(md_corpus))
     done = h.event("done")
     kinds = [e["event"] for e in h.events()]

@@ -117,6 +117,8 @@ _LMS = [
     },
     {"id": "nomic-embed", "type": "embeddings", "state": "not-loaded"},
     {"id": "vis", "type": "vlm", "state": "not-loaded", "max_context_length": 8192},
+    # A speculative-decoding draft head: labelled "llm" but cannot chat.
+    {"id": "g/mtp@q8_0", "type": "llm", "arch": "gemma4-assistant"},
 ]
 
 

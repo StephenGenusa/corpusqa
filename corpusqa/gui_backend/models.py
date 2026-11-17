@@ -12,6 +12,9 @@ from corpusqa.config.schema import ProviderConfig, provider_kind
 
 _OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 _LM_STUDIO_CHAT_TYPES = frozenset({"llm", "vlm"})
+# LM Studio labels speculative-decoding draft heads (e.g. Gemma's MTP
+# "gemma4-assistant") type "llm", but they cannot serve a chat request.
+_LM_STUDIO_DRAFT_ARCH_SUFFIX = "-assistant"
 
 
 class ModelInfo(BaseModel):
@@ -147,5 +150,6 @@ async def _lm_studio(http: httpx.AsyncClient, base: str) -> ModelListing:
             )
             for e in _data_entries(response.json())
             if e.get("type") in _LM_STUDIO_CHAT_TYPES
+            and not str(e.get("arch", "")).endswith(_LM_STUDIO_DRAFT_ARCH_SUFFIX)
         ]
     )
