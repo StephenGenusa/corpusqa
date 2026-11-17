@@ -195,7 +195,17 @@ async def generate_cards(
     def count(text: str) -> int:
         return client.count_tokens(TaskName.CATALOG_SUMMARIZE, text)
 
+    # As in extraction: only as many files at once as the provider serves
+    # calls at once, so each card is finished and stored early rather than
+    # every file's chunks sharing the slots round-robin until the end.
+    provider = config.tasks[TaskName.CATALOG_SUMMARIZE].provider
+    file_slots = asyncio.Semaphore(config.providers[provider].max_concurrency)
+
     async def one(row: FileRow) -> None:
+        async with file_slots:
+            await _one_card(row)
+
+    async def _one_card(row: FileRow) -> None:
         try:
             markdown = (cache_dir / f"{row.file_hash}.md").read_text(encoding="utf-8")
             if count(markdown) > budget:

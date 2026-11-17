@@ -47,8 +47,10 @@ def _cfg() -> types.SimpleNamespace:
                 model="m",
                 max_input_tokens=None,
                 fallbacks=[],
+                provider="p",
             )
-        }
+        },
+        providers={"p": types.SimpleNamespace(max_concurrency=1)},
     )
 
 

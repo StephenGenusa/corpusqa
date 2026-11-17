@@ -7,6 +7,7 @@ interactive confirmation. Costs are aggregated per task and recorded to
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import hashlib
 import json
@@ -456,6 +457,7 @@ class _Pass2Runner:
     cached: int = 0
     _calls_done: int = 0
     _calls_ticked: dict[str, int] = field(default_factory=dict)
+    _file_slots: asyncio.Semaphore | None = None
 
     async def run(
         self, candidates: list[Candidate]
@@ -463,6 +465,15 @@ class _Pass2Runner:
         """Extracts every candidate; returns results for those that produced one."""
         # Show the bar at 0/total before work starts so the user sees scope.
         self._report_progress()
+        # Read only as many files at once as the extract provider serves
+        # calls at once. Started all together, files would share its slots
+        # round-robin and all finish -- and be cached -- only at the very end
+        # of the run, so a stop hours in would keep nothing. A file's sections
+        # run one after another, so this keeps every slot busy.
+        provider = self.config.tasks[TaskName.EXTRACT].provider
+        self._file_slots = asyncio.Semaphore(
+            self.config.providers[provider].max_concurrency
+        )
         gathered = await gather_or_stop([self._one(c) for c in candidates])
         return [g for g in gathered if g is not None]
 
@@ -486,7 +497,9 @@ class _Pass2Runner:
                 )
                 self.cached += 1
             else:
-                result = await self._extract(cand)
+                assert self._file_slots is not None  # set by run()
+                async with self._file_slots:
+                    result = await self._extract(cand)
         except ProviderUnavailableError:
             raise  # stops the whole run (see run())
         except PartialExtractionError as exc:
