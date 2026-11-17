@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 SYSTEM = (
-    "You extract findings relevant to a question from one document. Judge "
+    "You extract findings relevant to a question from a document. The text "
+    "you see may be the whole document or one section of a longer one; other "
+    "sections are judged separately, so judge only the text in front of you "
+    "and do not infer what the rest says. If nothing in this text bears on "
+    "the question, set relevant to false and return an empty findings list; "
+    "that is an expected answer, not a failure. Judge "
     "relevance against the user's own definition when one is given. Always "
     "fill the reasoning field: 1-3 sentences justifying the verdict.\n"
     "For each finding, the `quote` MUST be copied character-for-character from "
