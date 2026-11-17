@@ -102,19 +102,29 @@ async function run(win, quit) {
     await click('#run');
     const statuses = [];
     const rowCounts = [];
+    const etas = [];
+    // Override with CORPUSQA_SMOKE_MAX_MIN; a timeout still records what was seen.
+    const maxMs = Number(env.CORPUSQA_SMOKE_MAX_MIN || 20) * 60 * 1000;
+    let timedOut = false;
     const t0 = Date.now();
     await wait(`document.body.dataset.runState === 'running'`, 10000, 'run start');
     while ((await js(`document.body.dataset.runState`)) === 'running') {
-      const s = (await status()).replace(/ · \d+:\d\d(:\d\d)?$/, '');
+      const full = await status();
+      const m = / · about (.+) left$/.exec(full);
+      if (m && etas[etas.length - 1] !== m[1]) etas.push(m[1]);
+      const s = full.replace(/ · [\d:]+ elapsed.*$/, '');
       if (statuses[statuses.length - 1] !== s) statuses.push(s);
       const n = await js(`document.querySelectorAll('#results li').length`);
       if (rowCounts[rowCounts.length - 1] !== n) rowCounts.push(n);
-      if (Date.now() - t0 > 20 * 60 * 1000) throw new Error('run took over 20 minutes');
+      if (Date.now() - t0 > maxMs) { timedOut = true; break; }
       await sleep(250);
     }
     summary.steps.run = {
       seconds: Math.round((Date.now() - t0) / 1000),
       statusSamples: statuses.length,
+      etaSamples: etas.length,
+      firstEtas: etas.slice(0, 5),
+      lastEtas: etas.slice(-5),
       firstStatuses: statuses.slice(0, 6),
       lastStatuses: statuses.slice(-4),
       rowCountsDuringRun: rowCounts,
@@ -132,6 +142,7 @@ async function run(win, quit) {
       })`),
     };
     await shot('1-results');
+    if (timedOut) throw new Error(`run took over ${maxMs / 60000} minutes`);
 
     // Click the first result: the reader opens with the quote highlighted.
     await click('#results li button.hit');

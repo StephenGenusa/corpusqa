@@ -7,6 +7,7 @@ import { SettingsDrawer } from './settings.js';
 
 const TASK_NAMES = ['catalog_summarize', 'query_route', 'extract', 'synthesize'];
 const { OTHER, modelOptions } = window.CorpusModelOptions;
+const { EtaEstimator, fmtRemaining } = window.CorpusEta;
 const $ = (id) => document.getElementById(id);
 
 const els = {
@@ -25,6 +26,7 @@ const state = {
   running: false,
   runFolder: '',
   startedAt: 0,
+  eta: new EtaEstimator(50), // time left, averaged over the last 50 responses
   timer: null,
   phase: '',
   models: new Map(), // provider -> Promise<{models, error}>
@@ -221,8 +223,14 @@ els.question.addEventListener('keydown', (e) => {
 // ---- status, errors and notices -------------------------------------------
 
 function setStatus(text, fraction = null) {
-  const elapsed = state.startedAt ? ` · ${fmtElapsed(Date.now() - state.startedAt)}` : '';
-  els.statusText.textContent = text + (state.running ? elapsed : '');
+  let timing = '';
+  if (state.running && state.startedAt) {
+    const now = Date.now();
+    timing = ` · ${fmtElapsed(now - state.startedAt)} elapsed`;
+    const left = state.phase === 'Cancelling' ? null : state.eta.remainingMs(now);
+    if (left !== null) timing += ` · about ${fmtRemaining(left)} left`;
+  }
+  els.statusText.textContent = text + timing;
   els.barFill.style.width = fraction === null ? '0%' : `${Math.round(fraction * 1000) / 10}%`;
   els.barFill.parentElement.classList.toggle('busy', state.running && fraction === null);
 }
@@ -310,6 +318,7 @@ async function startRun() {
     state.runFolder = folder;
     const definition = els.definition.value.trim();
     state.startedAt = Date.now();
+    state.eta.reset(null);
     state.phase = 'Starting';
     state.fraction = null;
     state.runError = false;
@@ -346,6 +355,7 @@ els.cancel.addEventListener('click', async () => {
 
 function onProgress(ev) {
   const total = ev.total || 0;
+  state.eta.record(ev.phase, ev.done, total, Date.now());
   if (ev.phase === 'converting') {
     state.phase = `Converting documents ${fmtInt(ev.done)}/${fmtInt(total)}`;
   } else {
