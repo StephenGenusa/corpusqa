@@ -17,10 +17,11 @@ dependencies = [
     "tqdm>=4.66",
     "ruamel-yaml>=0.18",
     "httpx>=0.27",
+    "defusedxml>=0.7",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.10", "types-PyYAML", "types-tqdm"]
+dev = ["pytest>=8.0", "ruff>=0.4", "mypy>=1.10", "types-PyYAML", "types-tqdm", "types-defusedxml"]
 build = ["pyinstaller>=6"]
 
 [project.scripts]

@@ -182,3 +182,23 @@ def test_trailing_gap_extends_final_label(tmp_path: Path) -> None:
     md = "intro words that open the volume\n\n" + LONG.format(22)
     pm = build_docx_page_map(src, md)
     assert [label for _, label in pm] == ["1", "22\u201324"]
+
+
+def test_docx_with_entity_declarations_is_refused(tmp_path: Path) -> None:
+    import zipfile
+
+    import pytest
+    from defusedxml import DefusedXmlException
+
+    bomb = tmp_path / "bomb.docx"
+    xml = (
+        '<?xml version="1.0"?>'
+        '<!DOCTYPE d [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;">]>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/'
+        'wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>&b;</w:t>'
+        "</w:r></w:p></w:body></w:document>"
+    )
+    with zipfile.ZipFile(bomb, "w") as zf:
+        zf.writestr("word/document.xml", xml)
+    with pytest.raises(DefusedXmlException):
+        docx_page_marks(bomb)

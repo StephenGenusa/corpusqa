@@ -13,7 +13,8 @@ import logging
 import re
 import zipfile
 from pathlib import Path
-from xml.etree import ElementTree as ET
+
+from defusedxml.ElementTree import fromstring as safe_fromstring
 
 from corpusqa.query.extractor import PageMap, _normalize_for_match
 
@@ -48,9 +49,14 @@ def docx_page_marks(source: Path) -> list[tuple[str, str]]:
         ``vp_<volume>_<label>``; the text is the following ~80 characters of
         run text, crossing paragraph boundaries (paragraphs are joined by a
         space). Other bookmarks are ignored.
+
+    Raises:
+        defusedxml.DefusedXmlException: The XML declares a DTD or entities.
     """
     with zipfile.ZipFile(source) as zf:
-        root = ET.fromstring(zf.read("word/document.xml"))
+        # The file is untrusted input: defusedxml refuses DTDs and entity
+        # declarations (entity-expansion bombs, external entities).
+        root = safe_fromstring(zf.read("word/document.xml"))
     parts: list[str] = []
     length = 0
     marks: list[tuple[str, int]] = []  # (label, offset into the joined text)
