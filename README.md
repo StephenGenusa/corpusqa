@@ -60,6 +60,18 @@ cancelled or failed. **Open results…** loads one back without any model calls;
 if a document has changed since, its quotes are shown without highlighting and
 the app says why. `corpusqa query … --save` writes the same file from the CLI.
 
+**Group answers.** Many hits often give the same answer in different words. After a
+run (or on opened results), **Group answers** sorts the hits into the distinct answers
+they give and lists them most widely supported first, e.g. "The kingdom — 37 hits in
+21 files"; each answer expands to its hits, and clicking one opens it in the reader. It
+uses the `synthesize` task's model (a larger model than the extraction one is worth it:
+grouping is only a few calls). Hits are sent in batches that fit that model's window,
+with a little surrounding text (`query.group_context_chars`); the model then merges
+answers that mean the same thing. The program, not the model, keeps track of which hit
+belongs where, so no hit can be lost: any the model leaves out are listed as "Not
+grouped". The result is stored in the results file. `corpusqa summarize` does the same
+from the CLI.
+
 **From source** (needs Node.js): `corpusqa gui [--config PATH]` runs
 `npm install` in `gui/` if needed, then starts the app with the current Python
 interpreter. The backend reads `.env` from the config file's directory.
@@ -212,6 +224,8 @@ corpusqa query "<question>" <dir>
         [--section-tokens N]                   # override tasks.extract.max_input_tokens (default: fill the window)
         [--save]                               # save the run to <dir>/.corpusqa/results/*.json as it goes
         [--no-cache] [--yes] [--show-cost] [--all-files]
+corpusqa summarize [RESULTS.json] [--dir <dir>] # group a saved run's hits into the distinct answers they give
+        [--all-hits] [--yes]                   # (default: the newest results file under <dir>)
 corpusqa explain <file> <dir>                  # persisted verdicts + model reasoning for one file
 corpusqa-eval <dir> --pairs tests/eval/qa_pairs.yaml
         [-v] [--query] [--sweep] [--mock] [--fail-under 0.95]

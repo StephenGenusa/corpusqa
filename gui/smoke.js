@@ -237,6 +237,40 @@ async function run(win, quit) {
     await shot('3-opened-results');
     delete process.env.CORPUSQA_SMOKE_PICK;
 
+    // Group answers on the opened results; the Answers tab shows the groups.
+    const tg = Date.now();
+    await click('#group-answers');
+    await wait(`/^(Grouped into|Grouping cancelled|Grouping stopped|Not started)/.test(document.getElementById('status-text').textContent)`, maxMs, 'grouping');
+    await sleep(500);
+    await click('#groups .group details summary');
+    await sleep(300);
+    const groupQuote = await js(`document.querySelector('#groups .group .hit .row-quote').textContent`);
+    await click('#groups .group .hit');
+    // Wait for the reader to show THIS hit (an earlier highlight may still be up).
+    const norm = (t) => t.replace(/\W+/g, ' ').trim().toLowerCase();
+    let readerMatch = false;
+    for (let i = 0; i < 50 && !readerMatch; i++) {
+      const marked = await js(`[...document.querySelectorAll('#reader-doc mark')].map(m => m.textContent).join(' ')`);
+      readerMatch = !!marked && norm(marked).includes(norm(groupQuote).slice(0, 40));
+      if (!readerMatch) await sleep(200);
+    }
+    summary.steps.group = await js(`({
+      status: document.getElementById('status-text').textContent,
+      tabShown: !document.getElementById('tab-groups').hidden,
+      groupsVisible: !document.getElementById('groups').hidden,
+      groups: [...document.querySelectorAll('#groups .group:not(.group-ungrouped)')].map(g => ({
+        answer: g.querySelector('.group-answer').textContent,
+        meta: g.querySelector('.group-meta').textContent,
+      })),
+      ungrouped: document.querySelector('#groups .group-ungrouped .group-meta')?.textContent ?? null,
+      notices: [...document.querySelectorAll('#notices .notice p')].map(p => p.textContent),
+      error: document.getElementById('error-panel').hidden ? null : document.getElementById('error-message').textContent,
+      readerMarked: !!document.querySelector('#reader-doc mark'),
+    })`);
+    summary.steps.group.readerMatchesClickedHit = readerMatch;
+    summary.steps.group.seconds = Math.round((Date.now() - tg) / 1000);
+    await shot('3b-grouped');
+
     // Cancel: start again (cache off) and cancel once reading starts.
     await click('#run');
     await wait(`document.body.dataset.runState === 'running'`, 10000, 'second run');

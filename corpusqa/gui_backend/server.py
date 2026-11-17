@@ -27,7 +27,7 @@ import sys
 import tempfile
 import threading
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Coroutine
 from pathlib import Path
 from typing import Any, Literal, Protocol, TextIO
 
@@ -58,6 +58,7 @@ from corpusqa.gui_backend.protocol import (
     FindingOut,
     FlagItem,
     FlagsEvent,
+    GroupStartParams,
     ModelsListParams,
     NoticeEvent,
     ProgressEvent,
@@ -72,11 +73,14 @@ from corpusqa.logging_setup import configure as configure_logging
 from corpusqa.logging_setup import run_log_file
 from corpusqa.query.budget import CostEstimate
 from corpusqa.query.extractor import ExtractionResult
+from corpusqa.query.grouping import group_answers, source_text_lookup, to_saved
 from corpusqa.query.pipeline import _load_page_map, run_query
 from corpusqa.query.results_file import (
     ResultsWriter,
+    SavedRun,
     list_results,
     load_results,
+    save_grouping,
 )
 
 _log = logging.getLogger("corpusqa.gui_backend")
@@ -434,6 +438,7 @@ class Server:
             "doc.get": self._doc_get,
             "results.list": self._results_list,
             "results.load": self._results_load,
+            "group.start": self._group_start,
         }
         handler = handlers.get(request.cmd)
         if handler is None:
@@ -513,18 +518,41 @@ class Server:
         self._cancel.clear()
         self._phase = "starting"
         # Reply before the task runs so {started} precedes the run's events.
-        self._run_task = self._spawn(self._run(params, config, run_id))
+        self._run_task = self._spawn(
+            self._run(self._execute(params, config, run_id), folder, run_id)
+        )
+        self._reply(request.id, {"started": True})
+
+    async def _group_start(self, request: Request) -> None:
+        params = GroupStartParams.model_validate(request.params)
+        if self._run_active:
+            self._reply_error(request.id, "a run is already in progress")
+            return
+        path = Path(params.path)
+        saved = await asyncio.to_thread(load_results, path)  # errors reply
+        config = load_config(self._config_path)
+        run_id = uuid.uuid4().hex[:12]
+        self._run_active = True
+        self._cancel.clear()
+        self._phase = "starting"
+        self._run_task = self._spawn(
+            self._run(
+                self._group(path, saved, config, run_id),
+                Path(saved.corpus),
+                run_id,
+            )
+        )
         self._reply(request.id, {"started": True})
 
     # -- the run ---------------------------------------------------------
 
     async def _run(
-        self, params: RunStartParams, config: AppConfig, run_id: str
+        self, work: Coroutine[Any, Any, DoneEvent], folder: Path, run_id: str
     ) -> None:
         done = DoneEvent()
         self._results_file = None
         try:
-            done = await self._execute(params, config, run_id)
+            done = await work
         except asyncio.CancelledError:
             done = DoneEvent(cancelled=True)
         except BudgetExceededError:
@@ -537,7 +565,7 @@ class Server:
             # The folder became unwritable mid-run, or its catalog is
             # read-only ("unable to open database file", "readonly database").
             _log.warning("run %s cannot write its index: %s", run_id, exc)
-            self.emit(ErrorEvent(message=_unwritable_message(Path(params.folder), exc)))
+            self.emit(ErrorEvent(message=_unwritable_message(folder, exc)))
         except Exception as exc:  # noqa: BLE001 -- the GUI must hear about it
             _log.exception("run %s failed", run_id)
             self.emit(ErrorEvent(message=f"{type(exc).__name__}: {exc}"))
@@ -557,6 +585,38 @@ class Server:
         self._phase = "idle"
         self._run_active = False
         self.emit(done)
+
+    async def _group(
+        self, path: Path, saved: SavedRun, config: AppConfig, run_id: str
+    ) -> DoneEvent:
+        """Groups a saved run's hits into distinct answers and stores them."""
+        self._phase = "preflight"
+        await self._preflight(config, [TaskName.SYNTHESIZE])
+        if self._cancel.is_set():
+            return DoneEvent(cancelled=True)
+        corpus = Path(saved.corpus)
+        index_dir = index_paths(corpus)[0]
+        logs = index_dir / "logs" if index_dir.is_dir() else path.parent / "logs"
+        with run_log_file(logs, self._verbosity) as log_path:
+            _log.info("gui group run=%s results=%s log=%s", run_id, path, log_path)
+            self._phase = "grouping"
+            client = (
+                self._client_factory(config)
+                if self._client_factory
+                else LLMTaskClient(config)
+            )
+            grouping = await group_answers(
+                saved,
+                config,
+                client,
+                markdown_for=await asyncio.to_thread(source_text_lookup, corpus),
+                on_progress=lambda d, t: self._progress("grouping", d, t),
+                confirm=lambda estimate: self._confirm(run_id, estimate),
+            )
+            await asyncio.to_thread(save_grouping, path, to_saved(grouping))
+        for problem in grouping.problems:
+            self.emit(NoticeEvent(message=problem))
+        return DoneEvent(results_path=str(path))
 
     async def _execute(
         self, params: RunStartParams, config: AppConfig, run_id: str
@@ -707,7 +767,10 @@ class Server:
                 )
 
     def _progress(
-        self, phase: Literal["converting", "reading"], done: int, total: int
+        self,
+        phase: Literal["converting", "reading", "grouping"],
+        done: int,
+        total: int,
     ) -> None:
         try:
             self.emit(ProgressEvent(phase=phase, done=done, total=total))

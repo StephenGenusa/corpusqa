@@ -159,10 +159,16 @@ class QueryConfig(_StrictModel):
             remains available explicitly.
         eval_retention_runs: Evaluation-cache rows are pruned to the most
             recent N run_ids.
+        group_context_chars: Characters of surrounding text shown with each
+            hit, on each side, when grouping hits into distinct answers.
+        group_output_tokens: Output reserve per grouping call (the rest of
+            the synthesize task's window holds hits).
     """
 
     sweep_threshold: int = Field(default=150, ge=0)
     eval_retention_runs: int = Field(default=20, ge=1)
+    group_context_chars: int = Field(default=300, ge=0, le=5000)
+    group_output_tokens: int = Field(default=2048, ge=256)
 
 
 class BudgetConfig(_StrictModel):

@@ -21,11 +21,17 @@ from corpusqa.config import load_config
 from corpusqa.config.schema import AppConfig, TaskConfig, TaskName
 from corpusqa.errors import BudgetExceededError, ConfigError, CorpusQAError
 from corpusqa.ingest.pipeline import index_paths, run_index, run_status
+from corpusqa.llm.tasks import LLMTaskClient
 from corpusqa.logging_setup import configure as configure_logging
 from corpusqa.query.budget import CostEstimate
 from corpusqa.query.hits import render_hits
 from corpusqa.query.pipeline import run_estimate, run_query
-from corpusqa.query.results_file import ResultsWriter
+from corpusqa.query.results_file import (
+    ResultsWriter,
+    list_results,
+    load_results,
+    save_grouping,
+)
 
 if TYPE_CHECKING:
     from tqdm import tqdm
@@ -119,6 +125,24 @@ def _build_parser() -> argparse.ArgumentParser:
     p_est.add_argument("directory", type=Path, nargs="?", default=Path("."))
     p_est.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
     p_est.add_argument("--yes", action="store_true")
+
+    p_sum = sub.add_parser(
+        "summarize",
+        help="group a saved run's hits into the distinct answers they give",
+    )
+    p_sum.add_argument(
+        "results",
+        type=Path,
+        nargs="?",
+        default=None,
+        help="results file (default: the newest under <directory>/.corpusqa/results)",
+    )
+    p_sum.add_argument("--dir", dest="directory", type=Path, default=Path("."))
+    p_sum.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
+    p_sum.add_argument("--yes", action="store_true")
+    p_sum.add_argument(
+        "--all-hits", action="store_true", help="list every hit under each answer"
+    )
 
     p_launch = sub.add_parser(
         "gui", help="launch the desktop GUI from a source checkout (development)"
@@ -222,6 +246,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_estimate(args, config)
         if args.command == "explain":
             return _cmd_explain(args, config)
+        if args.command == "summarize":
+            return _cmd_summarize(args, config)
     except CorpusQAError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_USER_ERROR
@@ -271,8 +297,9 @@ class _Progress:
     first report, when the total is known.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, desc: str = "  evaluating") -> None:
         self._bar: tqdm[NoReturn] | None = None
+        self._desc = desc
 
     def __call__(self, done: int, total: int) -> None:
         if self._bar is None:
@@ -280,11 +307,14 @@ class _Progress:
 
             self._bar = tqdm(
                 total=total,
-                desc="  evaluating",
+                desc=self._desc,
                 unit="call",
                 dynamic_ncols=True,
                 file=sys.stderr,
             )
+        if total != self._bar.total:
+            self._bar.total = total  # a plan can grow (e.g. extra merge rounds)
+            self._bar.refresh()
         self._bar.update(done - self._bar.n)  # report is absolute; bar wants a delta
         if done >= total:
             self.close()
@@ -380,6 +410,52 @@ def _cmd_query(args: argparse.Namespace, config: AppConfig) -> int:
     if report.extraction_failures or report.card_report.failed:
         return EXIT_PARTIAL
     return EXIT_OK
+
+
+def _cmd_summarize(args: argparse.Namespace, config: AppConfig) -> int:
+    """Groups a saved run's hits into distinct answers and prints them."""
+    import asyncio
+
+    from corpusqa.query.grouping import (
+        group_answers,
+        render_groups,
+        source_text_lookup,
+        to_saved,
+    )
+
+    path = args.results
+    if path is None:
+        saved = list_results(args.directory)
+        if not saved:
+            print(
+                f"error: no saved results under {args.directory}; run "
+                "`corpusqa query ... --save` first or name a results file",
+                file=sys.stderr,
+            )
+            return EXIT_USER_ERROR
+        path = saved[0].path
+    run = load_results(path)
+    print(f"grouping {path}", file=sys.stderr)
+    progress = _Progress("  grouping")
+    try:
+        grouping = asyncio.run(
+            group_answers(
+                run,
+                config,
+                LLMTaskClient(config),
+                markdown_for=source_text_lookup(Path(run.corpus)),
+                on_progress=progress,
+                confirm=(lambda e: True) if args.yes else _confirm,
+            )
+        )
+    except BudgetExceededError as exc:
+        print(f"aborted: {exc}", file=sys.stderr)
+        return EXIT_USER_ERROR
+    finally:
+        progress.close()
+    run = save_grouping(path, to_saved(grouping))
+    print(render_groups(run, None if args.all_hits else 3))
+    return EXIT_PARTIAL if grouping.problems else EXIT_OK
 
 
 def _cmd_explain(args: argparse.Namespace, config: AppConfig) -> int:

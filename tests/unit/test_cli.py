@@ -254,3 +254,64 @@ def test_query_save_writes_results_file(
     path = writer.path  # type: ignore[attr-defined]
     assert load_results(path).question == "q?"
     assert f"results saved to {path}" in capsys.readouterr().err
+
+
+def test_summarize_groups_newest_results_and_saves(
+    tmp_path: Path, monkeypatch: object, capsys: object
+) -> None:
+    import pytest
+
+    import corpusqa.cli.main as cli
+    import corpusqa.query.grouping as grouping_mod
+    from corpusqa.config import load_config
+    from corpusqa.query.extractor import ExtractionResult, Finding
+    from corpusqa.query.grouping import AnswerGroup, Grouping, collect_hits
+    from corpusqa.query.results_file import ResultsWriter, load_results
+
+    mp = monkeypatch
+    assert isinstance(mp, pytest.MonkeyPatch) and isinstance(
+        capsys, pytest.CaptureFixture
+    )
+    w = ResultsWriter.create(
+        tmp_path,
+        question="What was the joy?",
+        definition=None,
+        relevance="recall",
+        mode="sweep",
+        config=load_config(Path(EXAMPLE)),
+    )
+    w.add_file(
+        "v10.docx",
+        "h",
+        ExtractionResult(
+            file_hash="h",
+            relevant=True,
+            confidence=1.0,
+            findings=[Finding(claim="c", quote="the kingdom", page_label="418")],
+        ),
+    )
+    w.finish("finished")
+
+    async def fake_group(run: object, *_: object, **__: object) -> Grouping:
+        hits = collect_hits(run)  # type: ignore[arg-type]
+        return Grouping(groups=[AnswerGroup("The kingdom", hits)], model="m")
+
+    mp.setattr(grouping_mod, "group_answers", fake_group)
+    argv = ["summarize", "--dir", str(tmp_path), "--config", EXAMPLE, "--yes"]
+    assert cli.main(argv) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "1. The kingdom  (1 hit in 1 file)" in out
+    assert 'v10.docx p. 418: "the kingdom"' in out
+    saved = load_results(w.path).grouping
+    assert saved is not None and saved.groups[0].answer == "The kingdom"
+
+
+def test_summarize_without_results_says_how(tmp_path: Path, capsys: object) -> None:
+    import pytest
+
+    import corpusqa.cli.main as cli
+
+    assert isinstance(capsys, pytest.CaptureFixture)
+    argv = ["summarize", "--dir", str(tmp_path), "--config", EXAMPLE]
+    assert cli.main(argv) == cli.EXIT_USER_ERROR
+    assert "--save" in capsys.readouterr().err

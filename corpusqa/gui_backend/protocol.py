@@ -79,6 +79,12 @@ class DocGetParams(_Strict):
     rel_path: str
 
 
+class GroupStartParams(_Strict):
+    """``group.start``: group the hits of this results file."""
+
+    path: str
+
+
 class ResultsListParams(_Strict):
     """``results.list``: the corpus whose saved results to list."""
 
@@ -102,7 +108,7 @@ class ProgressEvent(_Strict):
     """Progress of the conversion (files) or reading (LLM calls) phase."""
 
     event: Literal["progress"] = "progress"
-    phase: Literal["converting", "reading"]
+    phase: Literal["converting", "reading", "grouping"]
     done: int
     total: int
 

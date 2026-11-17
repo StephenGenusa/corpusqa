@@ -77,8 +77,17 @@
           <summary>Problems <span id="problem-count" class="count"></span></summary>
           <ul id="problem-list"></ul>
         </details>
+        <div id="results-tools" class="results-tools" hidden>
+          <div class="tabs" role="tablist" aria-label="Results view">
+            <button id="tab-hits" type="button" role="tab" aria-selected="true">Hits</button>
+            <button id="tab-groups" type="button" role="tab" aria-selected="false" hidden>Answers</button>
+          </div>
+          <button id="group-answers" type="button"
+                  title="Group the hits into the distinct answers they give (uses the synthesize model)">Group answers</button>
+        </div>
         <p id="results-summary" class="results-summary"></p>
         <ol id="results" class="results" aria-label="Findings"></ol>
+        <section id="groups" class="groups" hidden aria-label="Distinct answers"></section>
         <p id="results-empty" class="empty">Choose a folder, ask a question and press Run.
           Every document is read in full; findings appear here as each file finishes.</p>
       </div>

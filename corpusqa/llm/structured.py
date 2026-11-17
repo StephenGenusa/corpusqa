@@ -143,6 +143,7 @@ async def complete_structured(
     on_truncated: Callable[[], None] | None = None,
     on_completion: Callable[[Completion], None] | None = None,
     on_malformed: Callable[[], None] | None = None,
+    max_tokens: int | None = None,
 ) -> T:
     """Runs a completion and validates the output against a Pydantic model.
 
@@ -165,6 +166,7 @@ async def complete_structured(
             invalid through the repair turn, and only its complete leading
             part was kept; the result is incomplete for a different reason
             than truncation, and more ``max_tokens`` would not help.
+        max_tokens: Output ceiling for these calls; None uses the task's.
 
     Returns:
         The validated model instance.
@@ -181,8 +183,9 @@ async def complete_structured(
     else:
         messages.insert(0, {"role": "system", "content": instruction.strip()})
 
+    limits: dict[str, int] = {} if max_tokens is None else {"max_tokens": max_tokens}
     completion = await client.complete(
-        task, messages, response_format={"type": "json_object"}
+        task, messages, response_format={"type": "json_object"}, **limits
     )
     if on_completion is not None:
         on_completion(completion)
@@ -239,7 +242,7 @@ async def complete_structured(
         {"role": "user", "content": guidance},
     ]
     repaired = await client.complete(
-        task, repair_messages, response_format={"type": "json_object"}
+        task, repair_messages, response_format={"type": "json_object"}, **limits
     )
     if on_completion is not None:
         on_completion(repaired)

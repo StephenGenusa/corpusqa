@@ -50,6 +50,9 @@ tasks:
 
 query:
   sweep_threshold: 150   # --mode auto sweeps at or below this many files
+  # Group answers (GUI button / `corpusqa summarize`) uses the synthesize task's model.
+  group_context_chars: 300   # surrounding text shown with each hit, per side
+  group_output_tokens: 2048  # output reserve per grouping call; the rest of the window holds hits
 
 ingest:
   ocr: "off"

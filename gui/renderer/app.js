@@ -4,6 +4,7 @@ import { h, clear, call, fmtInt, fmtElapsed, loadLocal, saveLocal } from './dom.
 import { ResultsView } from './results.js';
 import { ReaderView } from './reader-view.js';
 import { SettingsDrawer } from './settings.js';
+import { GroupsView } from './groups.js';
 
 const TASK_NAMES = ['catalog_summarize', 'query_route', 'extract', 'synthesize'];
 const { OTHER, modelOptions } = window.CorpusModelOptions;
@@ -11,7 +12,10 @@ const { EtaEstimator, fmtRemaining } = window.CorpusEta;
 const $ = (id) => document.getElementById(id);
 
 const els = {
-  folder: $('folder'), browse: $('browse'), openResults: $('open-results'), question: $('question'), definition: $('definition'),
+  folder: $('folder'), browse: $('browse'), openResults: $('open-results'),
+  resultsTools: $('results-tools'), tabHits: $('tab-hits'), tabGroups: $('tab-groups'),
+  groupAnswers: $('group-answers'), groups: $('groups'), resultsList: $('results'),
+  resultsSummary: $('results-summary'), question: $('question'), definition: $('definition'),
   provider: $('provider'), model: $('model'), modelCustom: $('model-custom'), modelRefresh: $('model-refresh'), mixed: $('mixed'),
   modelError: $('model-error'), run: $('run'), cancel: $('cancel'),
   statusText: $('status-text'), barFill: $('bar-fill'),
@@ -33,6 +37,8 @@ const state = {
   pendingCost: null,
   selectionDirty: false, // top-bar provider/model edited but not yet saved
   runError: false,
+  job: 'run', // what the running backend task is: 'run' or 'group'
+  resultsPath: null, // results file of the run on screen, once saved
 };
 
 const results = new ResultsView({
@@ -45,6 +51,8 @@ const reader = new ReaderView({
   head: $('reader-head'), file: $('reader-file'), page: $('reader-page'),
   notice: $('reader-notice'), scroll: $('reader-scroll'), doc: $('reader-doc'),
 }, () => state.runFolder || els.folder.value.trim());
+
+const groupsView = new GroupsView(els.groups, (row) => reader.open(row));
 
 const drawer = new SettingsDrawer($('drawer'), $('drawer-toggle'), {
   getModels,
@@ -234,11 +242,11 @@ async function openResults() {
     showError(`Could not open ${picked}: ${e.message}`);
     return;
   }
-  showSavedRun(loaded.run, loaded.sources || {});
+  showSavedRun(loaded.run, loaded.sources || {}, picked);
 }
 
 /** Shows a saved run as if it had just finished; nothing is re-read. */
-function showSavedRun(run, sources) {
+function showSavedRun(run, sources, path) {
   hideError();
   clear(els.notices);
   results.reset();
@@ -260,6 +268,11 @@ function showSavedRun(run, sources) {
   }
   results.setFailures(failures);
   if (run.answer) results.setAnswer(run.answer.text);
+  state.resultsPath = path;
+  groupsView.render(run, sources);
+  updateTools();
+  showTab(run.grouping ? 'groups' : 'hits');
+  for (const problem of run.grouping?.problems || []) addNotice(problem);
   const when = new Date(run.started_at).toLocaleString();
   const outcome = { finished: '', cancelled: ' (cancelled)', failed: ' (stopped by an error)', running: ' (did not finish)' }[run.outcome] ?? '';
   const n = results.rows.length;
@@ -271,6 +284,68 @@ function showSavedRun(run, sources) {
 }
 
 els.openResults.addEventListener('click', openResults);
+
+// ---- grouped answers ---------------------------------------------------------
+
+function showTab(name) {
+  const groups = name === 'groups' && !els.tabGroups.hidden;
+  els.tabHits.setAttribute('aria-selected', String(!groups));
+  els.tabGroups.setAttribute('aria-selected', String(groups));
+  els.resultsList.hidden = groups;
+  els.resultsSummary.hidden = groups;
+  els.groups.hidden = !groups;
+}
+
+function updateTools() {
+  els.tabGroups.hidden = !els.groups.childElementCount;
+  els.resultsTools.hidden = !(state.resultsPath && results.rows.length);
+  els.groupAnswers.disabled = state.running;
+  els.groupAnswers.textContent = els.tabGroups.hidden ? 'Group answers' : 'Group again';
+}
+
+async function startGroup() {
+  if (state.running || !state.resultsPath) return;
+  hideError();
+  state.job = 'group';
+  state.startedAt = Date.now();
+  state.eta.reset(null);
+  state.phase = 'Grouping answers';
+  state.fraction = null;
+  state.runError = false;
+  setRunning(true);
+  setStatus('Grouping answers');
+  try {
+    await call('group.start', { path: state.resultsPath });
+  } catch (e) {
+    setRunning(false);
+    state.startedAt = 0;
+    setStatus('Not started');
+    showError(e.message);
+  }
+}
+
+async function onGroupDone(ev, elapsed) {
+  state.job = 'run';
+  if (ev.cancelled) {
+    setStatus(`Grouping cancelled after ${elapsed}`);
+  } else if (state.runError) {
+    setStatus(`Grouping stopped with an error after ${elapsed}`);
+  } else {
+    try {
+      const loaded = await call('results.load', { path: ev.results_path });
+      showSavedRun(loaded.run, loaded.sources || {}, ev.results_path);
+      const n = loaded.run.grouping ? loaded.run.grouping.groups.length : 0;
+      setStatus(`Grouped into ${fmtInt(n)} distinct answer${n === 1 ? '' : 's'} in ${elapsed}`, 1);
+    } catch (e) {
+      showError(`Grouping finished but the results could not be reloaded: ${e.message}`);
+    }
+  }
+  updateTools();
+}
+
+els.groupAnswers.addEventListener('click', startGroup);
+els.tabHits.addEventListener('click', () => showTab('hits'));
+els.tabGroups.addEventListener('click', () => showTab('groups'));
 
 // ---- status, errors and notices -------------------------------------------
 
@@ -333,6 +408,7 @@ function setRunning(running) {
   els.folder.disabled = running;
   els.browse.disabled = running;
   els.openResults.disabled = running;
+  els.groupAnswers.disabled = running;
   els.provider.disabled = running;
   els.model.disabled = running;
   els.modelCustom.disabled = running;
@@ -365,6 +441,11 @@ async function startRun() {
     hideError();
     clear(els.notices);
     results.reset();
+    state.job = 'run';
+    state.resultsPath = null;
+    groupsView.clear();
+    showTab('hits');
+    updateTools();
     // Files may have changed since the last run (it reconverts them), so
     // text cached by the reader is dropped at every start.
     reader.clearCache();
@@ -411,6 +492,8 @@ function onProgress(ev) {
   state.eta.record(ev.phase, ev.done, total, Date.now());
   if (ev.phase === 'converting') {
     state.phase = `Converting documents ${fmtInt(ev.done)}/${fmtInt(total)}`;
+  } else if (ev.phase === 'grouping') {
+    state.phase = `Grouping answers ${fmtInt(ev.done)}/${fmtInt(total)} calls`;
   } else {
     state.phase = `Reading ${fmtInt(ev.done)}/${fmtInt(total)} sections`;
   }
@@ -422,6 +505,12 @@ function onDone(ev) {
   const elapsed = fmtElapsed(Date.now() - state.startedAt);
   state.startedAt = 0;
   setRunning(false);
+  if (state.job === 'group') {
+    onGroupDone(ev, elapsed);
+    return;
+  }
+  if (ev.results_path) state.resultsPath = ev.results_path;
+  updateTools();
   results.setFailures(ev.failures);
   if (ev.answer) results.setAnswer(ev.answer);
   const n = results.rows.length;

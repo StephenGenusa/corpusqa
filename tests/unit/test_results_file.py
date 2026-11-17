@@ -235,3 +235,13 @@ def test_failed_run_keeps_finished_files_and_says_why(tmp_path: Path) -> None:
     run = load_results(w.path)
     assert run.outcome == "failed" and "gone" in (run.error or "")
     assert len(run.files) == 1 and run.files[0].status == "not_relevant"
+
+
+def test_version_one_files_still_load(tmp_path: Path) -> None:
+    w = _writer(tmp_path)
+    data = json.loads(w.path.read_text(encoding="utf-8"))
+    data["format_version"] = 1
+    data.pop("grouping", None)
+    w.path.write_text(json.dumps(data), encoding="utf-8")
+    run = load_results(w.path)
+    assert run.format_version == 1 and run.grouping is None

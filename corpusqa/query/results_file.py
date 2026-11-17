@@ -28,7 +28,8 @@ from corpusqa.query.synthesizer import CitedAnswer
 
 _log = logging.getLogger("corpusqa.query")
 
-RESULTS_FORMAT_VERSION = 1
+# 2: adds ``grouping``. Version-1 files (no grouping) still load.
+RESULTS_FORMAT_VERSION = 2
 RESULTS_DIR_NAME = "results"
 _SLUG_MAX = 60
 
@@ -88,6 +89,39 @@ class SavedAnswer(_Model):
     uncited_claims: list[str] = Field(default_factory=list)
 
 
+class SavedHitRef(_Model):
+    """A hit: finding ``index`` of the saved file ``file``."""
+
+    file: str
+    index: int
+
+
+class SavedGroup(_Model):
+    """One distinct answer and the hits that give it."""
+
+    answer: str
+    hits: list[SavedHitRef]
+    volumes: int
+
+
+class SavedGrouping(_Model):
+    """Distinct answers found among a run's hits ("Group answers").
+
+    Attributes:
+        model: Model that grouped them.
+        created_at: ISO-8601 UTC time.
+        groups: Distinct answers, most widely supported first.
+        ungrouped: Hits the model did not place (kept, never dropped).
+        problems: Grouping calls that failed and what happened.
+    """
+
+    model: str
+    created_at: str
+    groups: list[SavedGroup] = Field(default_factory=list)
+    ungrouped: list[SavedHitRef] = Field(default_factory=list)
+    problems: list[str] = Field(default_factory=list)
+
+
 class TaskUse(_Model):
     """Provider and model a task was configured with."""
 
@@ -113,6 +147,7 @@ class SavedRun(_Model):
         tasks: Provider and model per task.
         files: Per-file outcomes, in the order they finished.
         answer: Synthesized answer, if any.
+        grouping: Distinct answers among the hits, once grouped.
     """
 
     format_version: int
@@ -129,6 +164,7 @@ class SavedRun(_Model):
     tasks: dict[str, TaskUse]
     files: list[SavedFile] = Field(default_factory=list)
     answer: SavedAnswer | None = None
+    grouping: SavedGrouping | None = None
 
 
 @dataclass(frozen=True)
@@ -303,24 +339,43 @@ class ResultsWriter:
 
     def _write(self) -> None:
         self._run.files = list(self._files.values())
-        data = self._run.model_dump_json(indent=2)
         try:
-            fd, tmp = tempfile.mkstemp(
-                dir=self.path.parent, prefix=".tmp-", suffix=".json"
-            )
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    handle.write(data)
-                os.replace(tmp, self.path)
-            except BaseException:
-                Path(tmp).unlink(missing_ok=True)
-                raise
+            _atomic_write(self.path, self._run.model_dump_json(indent=2))
         except OSError as exc:
             if self.write_error is None:
                 _log.warning("cannot write results file %s: %s", self.path, exc)
             self.write_error = f"{type(exc).__name__}: {exc}"
             return
         self.write_error = None
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Replaces ``path`` with ``text`` so readers never see a partial file."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def save_grouping(path: Path, grouping: SavedGrouping) -> SavedRun:
+    """Stores (replacing any earlier) grouped answers in a results file.
+
+    Raises:
+        ResultsFileError: The file cannot be read, is not a results file, or
+            cannot be written.
+    """
+    run = load_results(path)
+    run.format_version = RESULTS_FORMAT_VERSION
+    run.grouping = grouping
+    try:
+        _atomic_write(path, run.model_dump_json(indent=2))
+    except OSError as exc:
+        raise ResultsFileError(f"cannot write {path}: {exc}") from exc
+    return run
 
 
 def load_results(path: Path) -> SavedRun:

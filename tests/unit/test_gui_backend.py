@@ -201,6 +201,11 @@ class Harness:
         with self._cond:
             return [m for m in self.messages if "event" in m]
 
+    def clear(self) -> None:
+        """Forgets the messages so far (e.g. between two runs)."""
+        with self._cond:
+            self.messages.clear()
+
     def close(self) -> None:
         self._in.put("")
         self._thread.join(timeout=30)
@@ -1016,3 +1021,36 @@ def test_results_load_reports_a_bad_file(
     h = harness(_write_config(tmp_path), client=FakeClient({}))
     h.send({"id": "o", "cmd": "results.load", "params": {"path": str(bad)}})
     assert "not a corpusqa results file" in h.reply("o")["error"]
+
+
+def test_group_start_groups_a_saved_run(
+    md_corpus: Path, tmp_path: Path, harness: Callable[..., Harness]
+) -> None:
+    grouped = json.dumps({"groups": [{"answer": "Community gardens", "hits": [1]}]})
+    fake = FakeClient(
+        {TaskName.EXTRACT: [_extraction()], TaskName.SYNTHESIZE: [grouped]}
+    )
+    h = harness(_write_config(tmp_path), client=fake)
+    h.send(_start(md_corpus))
+    path = h.event("done")["results_path"]
+    h.clear()
+
+    h.send({"id": "g", "cmd": "group.start", "params": {"path": path}})
+    assert h.reply("g")["result"] == {"started": True}
+    done = h.event("done")
+    assert done["results_path"] == path and done["cancelled"] is False
+    phases = {e["phase"] for e in h.events() if e["event"] == "progress"}
+    assert phases == {"grouping"}
+
+    h.send({"id": "o", "cmd": "results.load", "params": {"path": path}})
+    grouping = h.reply("o")["result"]["run"]["grouping"]
+    assert grouping["groups"][0]["answer"] == "Community gardens"
+    assert grouping["groups"][0]["hits"] == [{"file": "gardens.md", "index": 0}]
+
+
+def test_group_start_reports_a_bad_results_file(
+    tmp_path: Path, harness: Callable[..., Harness]
+) -> None:
+    h = harness(_write_config(tmp_path), client=FakeClient({}))
+    h.send({"id": "g", "cmd": "group.start", "params": {"path": str(tmp_path / "x")}})
+    assert "cannot read" in h.reply("g")["error"]
