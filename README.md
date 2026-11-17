@@ -1,4 +1,4 @@
-# corpusqa — Corpus Q&A by reading full documents, not ranking fragments, not similiarity searches, not top-k
+# corpusqa — Corpus Q&A by reading full documents, not ranking fragments, not similarity searches, not top-k
 
 It will help if I give some background on why I created this program/library. I wanted to do text analysis — not keyword frequencies, pattern matching, and retrieving chunks based on lexical similarity, but _analysis of ideas_. Traditional RAG definitely has a place, but it was not what I was looking for and there are a lot of open source packages to choose from already. 
 
@@ -11,11 +11,6 @@ One requirement I had was that the program had to be very easy to use. Point the
 By default the answer is the **grounded hits**: for each relevant file, the verbatim quote that matched, its heading location, a page number when the source has one, and a verified flag — displayed directly, with no second model pass to re-describe them. Two things make a citation trustworthy. The quote is **snapped to the file**: the extraction model points at a passage, and the displayed quote is the exact substring taken from the source markdown, not the model's wording; a quote that can't be located is flagged `(unverified)` rather than shown as fact. And the **heading and page are system-derived** — the heading from where the quote actually sits in the document, the page from Docling's per-item page provenance — never taken from the model. Pass `--synthesize` to instead compose a single cited prose answer across the hits; that path additionally enforces that every claim-like sentence carries a citation resolving to real evidence, marking any failure `[uncited]` in place — surfaced, never silently dropped.
 
 The program, in its current state works, but it still needs work. Like most things AI, the prompt is important. It is an AI assisted generated program (Fable-5) so be forewarned, there's Fable AI slop. It was written for Linux and Windows and parts have been tested on both operating systems, and it probably works on OS X.
-
-| Clanker Warning: AI generated slop ahead                                                                                                                                                                                                         |
-|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| ![](img/clankerslop.jpg)                                                                                                                                                                                                                         |
-| I used Anthropic's appropriately named Fable 5 model to build this out in an AI assisted mode and despite multiple passes, it still has some fabled problems left to resolve. I don't think there are any 3K+ line methods but I could be wrong. |
 
 ## Why this exists
 
@@ -36,7 +31,7 @@ Classic top-k similarity retrieval fails the questions this tool targets:
 
 corpusqa answers these by **having an LLM judge raw document text** — never summaries or fragments — in one of two modes:
 
-- **Sweep mode** (default for corpora of 150 files or fewer): Sweep mode reads everything. There's no pre-filtering at all. Every parseable file in the corpus gets its full markdown handed to the LLM, which judges it against your question. The README calls this "the recall guarantee" — because nothing is skipped, nothing can be silently missed. The tradeoff is cost and latency, which scale linearly with corpus size. That's why it's the default only for corpora of 150 files or fewer.
+- **Sweep mode** (default for corpora of 150 files or fewer): Sweep mode reads everything. There's no pre-filtering at all. Every parseable file in the corpus gets its full markdown handed to the LLM, which judges it against your question. Because nothing is skipped, nothing can be silently missed. The tradeoff is cost and latency, which scale linearly with corpus size. That's why it's the default only for corpora of 150 files or fewer.
 - **Routed mode** (for larger corpora, to control cost): Routed mode adds a triage step in front of that full read. On the first query against a large corpus, each file gets an "extraction inventory" — a card listing its claims, its terms (with the sense they carry in that document), implicit topics, and notable absences. A "recall-biased router" then uses those cards to pick a subset of candidate files, and only those get the full raw-text read. The full read still happens — it's there to catch and correct any false positives the router let through — but you're no longer reading all 1,000 files end to end, just the ones the router flagged plus a correction pass.
 
 
@@ -153,7 +148,8 @@ Notes:
 
 `corpusqa.yaml` (validated at startup; unknown keys are errors). Abbreviated:
 
-```providers:
+```
+providers:
   ollama_local:
     api_base: "http://localhost:11434"
     max_concurrency: 2
