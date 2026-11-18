@@ -1,7 +1,7 @@
 // Answers view: a saved run's hits grouped into distinct answers.
 // Each answer expands to the hits that give it; clicking one opens the reader.
 
-import { h, clear, fmtInt, fileStem } from './dom.js';
+import { h, clear, fmtInt, fileStem, styledText } from './dom.js';
 
 const { decodeEntities } = window.CorpusReader;
 
@@ -63,7 +63,7 @@ export class GroupsView {
           h('span', { class: 'row-file', title: r.rel_path, text: fileStem(r.rel_path) }),
           r.page_label ? h('span', { class: 'row-page', text: `· p. ${r.page_label}` }) : null,
           r.verified ? null : h('span', { class: 'badge badge-warn', text: 'unverified' })),
-        h('blockquote', { class: 'row-quote', text: decodeEntities(r.quote) })));
+        h('blockquote', { class: 'row-quote' }, styledText(r.quote))));
       hits.append(r.el);
     }
     return h('li', { class: `group ${extra}`.trim() },

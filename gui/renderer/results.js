@@ -1,6 +1,6 @@
 // Results list: findings per file, the Problems section and the answer.
 
-import { h, clear, fmtInt, fileStem } from './dom.js';
+import { h, clear, fmtInt, fileStem, styledText } from './dom.js';
 
 const { parseCitations, matchCitation, decodeEntities } = window.CorpusReader;
 
@@ -74,7 +74,7 @@ export class ResultsView {
     );
     const button = h('button', { type: 'button', class: 'hit', onclick: () => this.select(row) },
       meta,
-      h('blockquote', { class: 'row-quote', text: decodeEntities(row.quote) }),
+      h('blockquote', { class: 'row-quote' }, styledText(row.quote)),
       row.claim ? h('p', { class: 'row-why' }, h('span', { class: 'why', text: 'why: ' }), decodeEntities(row.claim)) : null,
     );
     return h('li', {}, button);

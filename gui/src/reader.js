@@ -172,6 +172,11 @@
     return runs;
   }
 
+  /** Emphasis runs for a short standalone text such as a quote. */
+  function styledRuns(text) {
+    return text ? makeRuns(text, 0, text.length, [], null) : [];
+  }
+
   /**
    * Turns the window [start, end) into display blocks: headings, paragraphs
    * and page markers. Offsets are absolute positions in `text`.
@@ -372,6 +377,7 @@
 
   return {
     decodeEntities,
+    styledRuns,
     NOT_LOCATED,
     codePointMapper,
     mapDocOffsets,

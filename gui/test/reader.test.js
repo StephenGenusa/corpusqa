@@ -274,3 +274,14 @@ test('buildBlocks keeps a page mark that falls inside an italic span', () => {
     { kind: 'text', text: ' f' },
   ]);
 });
+
+test('styledRuns styles a quote and leaves a cut-off asterisk as written', () => {
+  const { styledRuns } = require('../src/reader.js');
+  assert.deepEqual(styledRuns('cross; *wherefore* God'), [
+    { kind: 'text', text: 'cross; ' },
+    { kind: 'text', text: 'wherefore', em: true },
+    { kind: 'text', text: ' God' },
+  ]);
+  assert.deepEqual(styledRuns('wherefore* God'), [{ kind: 'text', text: 'wherefore* God' }]);
+  assert.deepEqual(styledRuns(''), []);
+});

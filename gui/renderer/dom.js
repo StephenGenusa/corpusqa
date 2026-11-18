@@ -70,3 +70,18 @@ export function saveLocal(key, value) {
     /* storage unavailable: the setting just is not remembered */
   }
 }
+
+/**
+ * Text as the book prints it: escapes decoded, *italic* and **bold** styled.
+ * @param {string} text stored text
+ * @returns {Node[]} nodes to append
+ */
+export function styledText(text) {
+  const { styledRuns, decodeEntities } = window.CorpusReader;
+  return styledRuns(text).map((run) => {
+    let node = document.createTextNode(decodeEntities(run.text));
+    if (run.em) node = h('em', {}, node);
+    if (run.strong) node = h('strong', {}, node);
+    return node;
+  });
+}
