@@ -279,7 +279,7 @@ els.question.addEventListener('keydown', (e) => {
 async function openResults() {
   if (state.running) return;
   const folder = els.folder.value.trim();
-  const picked = await window.corpusqa.pickResultsFile(folder ? `${folder}/.corpusqa/results` : '');
+  const picked = await window.corpusqa.pickResultsFile(folder);
   if (!picked) return;
   let loaded;
   try {

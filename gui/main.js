@@ -3,9 +3,17 @@
 const {
   app, BrowserWindow, dialog, ipcMain, nativeTheme, powerSaveBlocker, shell,
 } = require('electron');
+const fs = require('node:fs');
 const path = require('node:path');
 const { Backend, ensureUserConfig, resolveBackend } = require('./src/bridge');
 const { createSleepGuard, trackRun } = require('./src/sleep-guard');
+
+// On Linux, Electron opens file dialogs through the desktop portal when one
+// is running (GNOME). The portal ignores the start folder and hidden-file
+// options, so "Open results…" opened in the home folder with .corpusqa
+// hidden. Requiring an impossible portal version makes it use the GTK
+// dialog, which honours both.
+if (process.platform === 'linux') app.commandLine.appendSwitch('xdg-portal-required-version', '999');
 
 const REPO_ROOT = path.resolve(__dirname, '..');
 
@@ -108,24 +116,43 @@ ipcMain.handle('open-config-folder', () => {
   return configPath;
 });
 
-ipcMain.handle('pick-folder', async (_e, defaultPath) => {
+/**
+ * The first of `candidates` that is an existing folder, with a trailing
+ * separator: without one GTK opens the parent and treats the last part as a
+ * file name. Undefined when none exists (the dialog picks its own).
+ */
+function dialogStart(...candidates) {
+  for (const c of candidates) {
+    if (typeof c !== 'string' || !c) continue;
+    try {
+      if (fs.statSync(c).isDirectory()) return c.endsWith(path.sep) ? c : c + path.sep;
+    } catch {
+      /* missing or unreadable: try the next */
+    }
+  }
+  return undefined;
+}
+
+ipcMain.handle('pick-folder', async (_e, folder) => {
   const res = await dialog.showOpenDialog(win, {
     title: 'Choose a folder of documents',
-    defaultPath: typeof defaultPath === 'string' && defaultPath ? defaultPath : undefined,
+    defaultPath: dialogStart(folder),
     properties: ['openDirectory'],
   });
   return res.canceled || res.filePaths.length === 0 ? null : res.filePaths[0];
 });
 
-ipcMain.handle('pick-results-file', async (_e, defaultPath) => {
+ipcMain.handle('pick-results-file', async (_e, folder) => {
   // The smoke driver cannot click a native dialog; it names the file instead.
   if (process.env.CORPUSQA_SMOKE === '1' && process.env.CORPUSQA_SMOKE_PICK) {
     return process.env.CORPUSQA_SMOKE_PICK;
   }
+  const corpus = typeof folder === 'string' ? folder : '';
   const res = await dialog.showOpenDialog(win, {
     title: 'Open saved results',
-    defaultPath: typeof defaultPath === 'string' && defaultPath ? defaultPath : undefined,
-    properties: ['openFile'],
+    // The folder's results (a dot-folder, hence showHiddenFiles), else the folder.
+    defaultPath: dialogStart(corpus && path.join(corpus, '.corpusqa', 'results'), corpus),
+    properties: ['openFile', 'showHiddenFiles'],
     filters: [{ name: 'corpusqa results', extensions: ['json'] }],
   });
   return res.canceled || res.filePaths.length === 0 ? null : res.filePaths[0];
