@@ -2,11 +2,17 @@
 // documents, for phrasing the Question and Definition. Nothing is saved; the
 // conversation lives in this window until "New conversation" or app exit.
 
-import { h, clear, call, loadLocal, saveLocal } from './dom.js';
+import { h, clear, call, loadLocal, saveLocal, styledText } from './dom.js';
 
 const { parseReply } = window.CorpusChat;
 const { OTHER, modelOptions } = window.CorpusModelOptions;
 const MODEL_KEY = 'corpusqa.chatModel'; // {provider, model}
+
+/** A reply's text as written in Markdown: `code`, **bold** and *italic*. */
+function richText(text) {
+  return text.split(/(`[^`\n]+`)/).flatMap((part) => (
+    /^`[^`]+`$/.test(part) ? [h('code', { text: part.slice(1, -1) })] : styledText(part)));
+}
 
 export class ChatPanel {
   /**
@@ -203,7 +209,7 @@ export class ChatPanel {
       if (!parts.length) msg.append(h('p', { class: 'hint', text: '(empty reply)' }));
       for (const part of parts) {
         if (part.kind === 'text') {
-          msg.append(h('p', { text: part.text }));
+          msg.append(h('p', {}, richText(part.text)));
           continue;
         }
         const label = part.kind === 'question' ? 'Question' : 'Definition';
@@ -214,7 +220,7 @@ export class ChatPanel {
               this.deps.onUse(part.kind, part.text);
               e.currentTarget.textContent = 'Used ✓';
             } }, `Use as ${label}`)),
-          h('p', { text: part.text })));
+          h('p', {}, richText(part.text))));
       }
       if (m.truncated) msg.append(h('p', { class: 'hint', text: 'The reply was cut off at its length limit.' }));
       this.log.append(msg);
