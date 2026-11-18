@@ -47,8 +47,14 @@ async function run(win, quit) {
       summary.console.push(`${level}: ${message}`);
     }
   });
+  // The smoke test runs as the real app and shares its remembered settings
+  // (cache option, folder, document choices, chat model). Snapshot them and
+  // put them back at the end, so a test never changes how the user's next
+  // run behaves (it turns the cache off, for one).
+  let storedSettings = null;
   try {
     await new Promise((r) => wc.once('did-finish-load', r));
+    storedSettings = await js(`JSON.stringify(Object.entries(localStorage))`);
     await wait(`document.body.dataset.ready === '1'`, 30000, 'renderer ready');
     summary.steps.ready = await js(`({
       providers: [...document.querySelectorAll('#provider option')].map(o => o.value),
@@ -350,6 +356,15 @@ async function run(win, quit) {
   } catch (err) {
     summary.error = String(err && err.stack ? err.stack : err);
   } finally {
+    if (storedSettings !== null) {
+      try {
+        summary.settingsRestored = await js(`(() => { localStorage.clear();
+          for (const [k, v] of JSON.parse(${JSON.stringify(storedSettings)})) localStorage.setItem(k, v);
+          return localStorage.length; })()`);
+      } catch (err) {
+        summary.settingsRestoreError = String(err);
+      }
+    }
     if (env.CORPUSQA_SMOKE_OUT) fs.writeFileSync(env.CORPUSQA_SMOKE_OUT, JSON.stringify(summary, null, 2));
     quit();
   }
