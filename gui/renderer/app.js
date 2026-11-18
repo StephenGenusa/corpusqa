@@ -5,6 +5,8 @@ import { ResultsView } from './results.js';
 import { ReaderView } from './reader-view.js';
 import { SettingsDrawer } from './settings.js';
 import { GroupsView } from './groups.js';
+import { DocumentsPanel } from './files.js';
+import { ChatPanel } from './chat.js';
 
 const TASK_NAMES = ['catalog_summarize', 'query_route', 'extract', 'synthesize'];
 const { OTHER, modelOptions } = window.CorpusModelOptions;
@@ -23,6 +25,7 @@ const els = {
   restart: $('restart'), errorDismiss: $('error-dismiss'), notices: $('notices'),
   costDialog: $('cost-dialog'), costTotal: $('cost-total'), costLines: $('cost-lines'),
   costProceed: $('cost-proceed'), costCancel: $('cost-cancel'),
+  docsToggle: $('docs-toggle'), chatToggle: $('chat-toggle'),
 };
 
 const state = {
@@ -54,9 +57,48 @@ const reader = new ReaderView({
 
 const groupsView = new GroupsView(els.groups, (row) => reader.open(row));
 
+const docs = new DocumentsPanel({ toggle: els.docsToggle, panel: $('docs-panel') }, () => {
+  if (!state.running && docs.noneChosen) setStatus('No documents selected');
+});
+
+/** " · 12 of 60 documents" when the run reads a subset, else ''. */
+function subsetNote(selection, total) {
+  if (!selection) return '';
+  return total ? ` · ${fmtInt(selection.length)} of ${fmtInt(total)} documents` : ` · ${fmtInt(selection.length)} documents`;
+}
+
+function useSuggestion(kind, text) {
+  const field = kind === 'question' ? els.question : els.definition;
+  field.value = text;
+  field.dispatchEvent(new Event('change', { bubbles: true }));
+  field.classList.remove('field-flash');
+  void field.offsetWidth; // restart the animation
+  field.classList.add('field-flash');
+}
+
 const drawer = new SettingsDrawer($('drawer'), $('drawer-toggle'), {
   getModels,
   onConfig: (config) => applyConfig(config),
+});
+
+const chat = new ChatPanel($('chat'), els.chatToggle, {
+  getModels,
+  getConfig: () => state.config,
+  getContext: () => {
+    const { relevance, mode, synthesize } = drawer.queryOptions();
+    const { chosen, total } = docs.counts();
+    return {
+      question: els.question.value,
+      definition: els.definition.value,
+      relevance,
+      mode,
+      synthesize,
+      documents_chosen: chosen,
+      documents_total: total,
+      model: selectedModel(),
+    };
+  },
+  onUse: useSuggestion,
 });
 
 // ---- config, provider and model ------------------------------------------
@@ -215,13 +257,17 @@ async function loadConfig() {
 
 els.folder.value = loadLocal('corpusqa.folder', '');
 els.definition.value = loadLocal('corpusqa.definition', '');
-els.folder.addEventListener('change', () => saveLocal('corpusqa.folder', els.folder.value.trim()));
+els.folder.addEventListener('change', () => {
+  saveLocal('corpusqa.folder', els.folder.value.trim());
+  docs.load(els.folder.value.trim());
+});
 els.definition.addEventListener('change', () => saveLocal('corpusqa.definition', els.definition.value));
 els.browse.addEventListener('click', async () => {
   const picked = await window.corpusqa.pickFolder(els.folder.value.trim());
   if (picked) {
     els.folder.value = picked;
     saveLocal('corpusqa.folder', picked);
+    docs.load(picked);
   }
 });
 els.question.addEventListener('keydown', (e) => {
@@ -269,6 +315,11 @@ function showSavedRun(run, sources, path) {
   results.setFailures(failures);
   if (run.answer) results.setAnswer(run.answer.text);
   state.resultsPath = path;
+  docs.load(run.corpus, run.selection ?? null).then((missing) => {
+    if (missing.length) {
+      addNotice(`${fmtInt(missing.length)} of the documents this run read ${missing.length === 1 ? 'is' : 'are'} no longer in the folder: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? '…' : ''}`);
+    }
+  });
   groupsView.render(run, sources);
   updateTools();
   showTab(run.grouping ? 'groups' : 'hits');
@@ -276,7 +327,7 @@ function showSavedRun(run, sources, path) {
   const when = new Date(run.started_at).toLocaleString();
   const outcome = { finished: '', cancelled: ' (cancelled)', failed: ' (stopped by an error)', running: ' (did not finish)' }[run.outcome] ?? '';
   const n = results.rows.length;
-  setStatus(`Saved results from ${when}${outcome} · ${fmtInt(n)} finding${n === 1 ? '' : 's'}`, run.outcome === 'finished' ? 1 : null);
+  setStatus(`Saved results from ${when}${outcome} · ${fmtInt(n)} finding${n === 1 ? '' : 's'}${subsetNote(run.selection, 0)}`, run.outcome === 'finished' ? 1 : null);
   const stale = Object.values(sources).filter((v) => v !== 'same').length;
   if (stale) {
     addNotice(`${fmtInt(stale)} document${stale === 1 ? ' has' : 's have'} changed or gone since these results were saved; their quotes cannot be shown in context.`);
@@ -407,6 +458,8 @@ function setRunning(running) {
   els.cancel.disabled = false;
   els.folder.disabled = running;
   els.browse.disabled = running;
+  els.docsToggle.disabled = running || !docs.folder;
+  if (running) docs.close();
   els.openResults.disabled = running;
   els.groupAnswers.disabled = running;
   els.provider.disabled = running;
@@ -431,6 +484,12 @@ async function startRun() {
   if (!question) {
     els.question.focus();
     setStatus('Type a question first');
+    return;
+  }
+  if (docs.folder !== folder) await docs.load(folder);
+  if (docs.noneChosen) {
+    setStatus('No documents selected');
+    docs.open();
     return;
   }
   els.run.disabled = true;
@@ -459,7 +518,9 @@ async function startRun() {
     setRunning(true);
     setStatus('Starting');
     try {
-      await call('run.start', { folder, question, definition: definition || null, ...drawer.queryOptions() });
+      const files = docs.chosenList();
+      state.runSubset = files ? subsetNote(files, docs.counts().total) : '';
+      await call('run.start', { folder, question, definition: definition || null, ...drawer.queryOptions(), files });
     } catch (e) {
       // "already in progress": the backend is running an earlier start, so
       // the running state (and its Cancel button) stays.
@@ -516,7 +577,7 @@ function onDone(ev) {
   const n = results.rows.length;
   if (ev.cancelled) setStatus(`Cancelled after ${elapsed}`);
   else if (state.runError) setStatus(`Stopped with an error after ${elapsed}`);
-  else setStatus(`Finished in ${elapsed} · ${fmtInt(n)} finding${n === 1 ? '' : 's'}`, 1);
+  else setStatus(`Finished in ${elapsed} · ${fmtInt(n)} finding${n === 1 ? '' : 's'}${state.runSubset || ''}`, 1);
 }
 
 function onCostConfirm(ev) {
@@ -577,6 +638,8 @@ window.corpusqa.onEvent((ev) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && drawer.isOpen) drawer.close();
 });
+
+docs.load(els.folder.value.trim());
 
 loadConfig().finally(() => {
   document.body.dataset.ready = '1';

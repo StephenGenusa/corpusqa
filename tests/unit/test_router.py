@@ -106,3 +106,32 @@ def test_explicit_exclusion_is_honored(tmp_path: Path) -> None:
             route("q", None, store, client, config)  # type: ignore[arg-type]
         )
     assert candidates == []
+
+
+def test_routing_over_chosen_files_shows_the_model_only_those(tmp_path: Path) -> None:
+    config = load_config(EXAMPLE)
+    h1, h2 = "4" * 64, "5" * 64
+    with CatalogStore(tmp_path / "c.db") as store:
+        for h, rel in ((h1, "a.md"), (h2, "b.md")):
+            store.upsert_file(_row(h, rel))
+            store.upsert_card(h, CatalogCard(claims=[f"claim {rel}"]), "m")
+        client = FakeClient(
+            {
+                TaskName.QUERY_ROUTE: [
+                    json.dumps(
+                        {
+                            "decisions": [
+                                {"file_hash": h2, "include": True, "reason": "y"}
+                            ]
+                        }
+                    )
+                ]
+            }
+        )
+        candidates = asyncio.run(
+            route("q", None, store, client, config, only=frozenset({"b.md"}))  # type: ignore[arg-type]
+        )
+    assert [c.file.rel_path for c in candidates] == ["b.md"]
+    [messages] = client.calls[TaskName.QUERY_ROUTE]
+    prompt = messages[-1]["content"]
+    assert "claim b.md" in prompt and "claim a.md" not in prompt

@@ -132,18 +132,22 @@ def _pass1_estimate(
     cache_dir: Path,
     client: LLMTaskClient,
     config: AppConfig,
+    parseable: list[FileRow],
 ) -> CostEstimate:
-    """Projects card-generation + routing cost from the current catalog.
+    """Projects card-generation + routing cost for the files in play.
 
     Big files are cataloged by chunk-then-merge, so their full length is sent
     (across several calls), not a truncated prefix. The projection counts the
     whole markdown to track real spend rather than under-counting.
     """
+    in_play = {row.rel_path for row in parseable}
     pending_tokens: list[int] = []
     for row in store.files_needing_cards():
+        if row.rel_path not in in_play:
+            continue
         markdown = (cache_dir / f"{row.file_hash}.md").read_text(encoding="utf-8")
         pending_tokens.append(client.count_tokens(TaskName.CATALOG_SUMMARIZE, markdown))
-    return estimate_pass1(pending_tokens, len(store.all_parseable_files()), config)
+    return estimate_pass1(pending_tokens, len(parseable), config)
 
 
 @dataclass
@@ -213,6 +217,7 @@ async def run_query(
     confirm: Callable[[CostEstimate], bool] | None = None,
     client: LLMTaskClient | None = None,
     results_file: ResultsWriter | None = None,
+    files: list[str] | None = None,
 ) -> QueryReport:
     """Answers a question over an indexed corpus.
 
@@ -245,6 +250,9 @@ async def run_query(
             LLM work to do.
         client: Injectable task client (M4-C1 test/eval seam); a real
             ``LLMTaskClient`` is constructed when omitted.
+        files: Query only these corpus paths (a chosen subset); None means
+            every parseable file. Paths not in the index are ignored with a
+            warning; an empty result is an error.
         results_file: Records the run as it goes (each file's outcome, the
             mode, the answer) and how it ended, including a cancel or error.
         confirm: Callback deciding whether to proceed at the given
@@ -275,7 +283,7 @@ async def run_query(
         question_hash = _question_hash(question, definition, relevance, config)
 
         with CatalogStore(db_path) as store:
-            parseable = store.all_parseable_files()
+            parseable = _restrict(store.all_parseable_files(), files)
             if mode == "auto":
                 mode = (
                     "sweep"
@@ -294,6 +302,9 @@ async def run_query(
                 client,
                 config,
                 confirm,
+                only=None
+                if files is None
+                else frozenset(r.rel_path for r in parseable),
             )
             plan = _plan_pass2(
                 candidates, store, cache_dir, client, config, question_hash, use_cache
@@ -378,6 +389,33 @@ def _question_hash(
     ).hexdigest()
 
 
+def _restrict(parseable: list[FileRow], files: list[str] | None) -> list[FileRow]:
+    """Narrows the parseable files to a chosen subset (None keeps all).
+
+    Raises:
+        CorpusQAError: None of the chosen files is in the index.
+    """
+    if files is None:
+        return parseable
+    wanted = set(files)
+    kept = [row for row in parseable if row.rel_path in wanted]
+    missing = sorted(wanted - {row.rel_path for row in kept})
+    if missing:
+        _log.warning(
+            "%d chosen file(s) not in the index or not parseable, skipped: %s",
+            len(missing),
+            ", ".join(missing[:5]) + (" ..." if len(missing) > 5 else ""),
+        )
+    if not kept:
+        raise CorpusQAError("none of the chosen files is in the index")
+    return kept
+
+
+def _only(parseable: list[FileRow], files: list[str] | None) -> frozenset[str] | None:
+    """The routing restriction for a chosen subset (None: whole corpus)."""
+    return None if files is None else frozenset(r.rel_path for r in parseable)
+
+
 async def _select_candidates(
     mode: str,
     question: str,
@@ -388,6 +426,8 @@ async def _select_candidates(
     client: LLMTaskClient,
     config: AppConfig,
     confirm: Callable[[CostEstimate], bool] | None,
+    *,
+    only: frozenset[str] | None = None,
 ) -> tuple[list[Candidate], CardReport, float]:
     """Picks the files pass 2 reads.
 
@@ -400,10 +440,10 @@ async def _select_candidates(
     """
     if mode == "sweep":
         return [Candidate(file=f, reason="sweep") for f in parseable], CardReport(), 0.0
-    pass1_estimate = _pass1_estimate(store, cache_dir, client, config)
+    pass1_estimate = _pass1_estimate(store, cache_dir, client, config, parseable)
     _check_budget_gate(pass1_estimate, config, confirm, "cataloging+routing")
-    card_report = await generate_cards(store, cache_dir, client, config)
-    candidates = await route(question, definition, store, client, config)
+    card_report = await generate_cards(store, cache_dir, client, config, only=only)
+    candidates = await route(question, definition, store, client, config, only=only)
     _include_failed_cards(candidates, parseable, card_report)
     return candidates, card_report, pass1_estimate.total_usd
 
@@ -641,11 +681,12 @@ async def run_estimate(
         raise CorpusQAError(f"no index at {corpus_root}")
     client = client or LLMTaskClient(config)
     with CatalogStore(db_path) as store:
-        pass1_estimate = _pass1_estimate(store, cache_dir, client, config)
+        parseable = store.all_parseable_files()
+        pass1_estimate = _pass1_estimate(store, cache_dir, client, config, parseable)
         _check_budget_gate(pass1_estimate, config, confirm, "cataloging+routing")
         card_report = await generate_cards(store, cache_dir, client, config)
         candidates = await route(question, definition, store, client, config)
-        _include_failed_cards(candidates, store.all_parseable_files(), card_report)
+        _include_failed_cards(candidates, parseable, card_report)
         tokens = [
             _token_counts(
                 plan_sections(

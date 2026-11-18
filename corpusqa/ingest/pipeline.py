@@ -79,6 +79,7 @@ def run_index(
     force_all: bool = False,
     on_progress: Callable[[int, int], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    only: set[str] | None = None,
 ) -> IndexReport:
     """Runs the incremental index pipeline over a corpus directory.
 
@@ -91,6 +92,9 @@ def run_index(
             conversion; ``total`` counts the files needing conversion.
         should_stop: Checked between files; a true result ends the run early
             (``IndexReport.stopped``).
+        only: Convert only these corpus paths (a query over chosen files);
+            other files needing conversion are left for a later run. Moves
+            and deletions are still recorded. None converts everything.
 
     Returns:
         A per-run report.
@@ -133,6 +137,8 @@ def run_index(
             return force_all or item.rel_path in forced
 
         def needs_conversion(item: DiscoveredFile) -> bool:
+            if only is not None and item.rel_path not in only:
+                return False
             if item.drift in (DriftKind.NEW, DriftKind.MODIFIED):
                 return True
             if item.drift is not DriftKind.UNCHANGED:
@@ -157,6 +163,8 @@ def run_index(
                 report.moved += 1
             elif item.drift is DriftKind.UNCHANGED and not needs_conversion(item):
                 report.unchanged += 1
+            elif not needs_conversion(item):
+                continue  # new or modified, but not among the chosen files
             else:  # NEW, MODIFIED, or forced
                 if item.drift is DriftKind.MODIFIED:
                     _delete(store, cache_dir, known[item.rel_path])

@@ -19,6 +19,8 @@
                placeholder="Choose a folder of documents">
       </label>
       <button id="browse" type="button">Browse…</button>
+      <button id="docs-toggle" class="docs-toggle" type="button" aria-haspopup="dialog"
+              aria-expanded="false" aria-controls="docs-panel">Documents ▾</button>
       <button id="open-results" type="button" title="Open a saved run's results">Open results…</button>
     </div>
     <div class="row">
@@ -27,6 +29,8 @@
         <input id="question" type="text" autocomplete="off"
                placeholder="What do these documents say about…?">
       </label>
+      <button id="chat-toggle" type="button" aria-expanded="false" aria-controls="chat"
+              title="Ask a model how best to phrase the question">Wording help</button>
       <button id="run" class="primary" type="button">Run</button>
       <button id="cancel" type="button" hidden>Cancel</button>
     </div>
@@ -57,6 +61,7 @@
       </div>
     </div>
     <p id="model-error" class="field-error topbar-error" hidden></p>
+    <div id="docs-panel" class="docs-panel" role="dialog" aria-label="Documents to query" hidden></div>
   </header>
 
   <main class="panes">
@@ -105,6 +110,7 @@
         </article>
       </div>
     </section>
+    <aside id="chat" class="chat-panel" aria-label="Wording help"></aside>
   </main>
 
   <dialog id="cost-dialog" class="cost-dialog" aria-labelledby="cost-title">
@@ -120,6 +126,8 @@
   <script src="../src/reader.js"></script>
   <script src="../src/model-options.js"></script>
   <script src="../src/eta.js"></script>
+  <script src="../src/file-selection.js"></script>
+  <script src="../src/chat-text.js"></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>

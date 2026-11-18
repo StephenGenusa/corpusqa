@@ -169,6 +169,8 @@ async def generate_cards(
     cache_dir: Path,
     client: LLMTaskClient,
     config: AppConfig,
+    *,
+    only: frozenset[str] | None = None,
 ) -> CardReport:
     """Generates catalog cards for all files lacking one.
 
@@ -180,6 +182,7 @@ async def generate_cards(
         cache_dir: Parse-cache directory holding ``<hash>.md`` files.
         client: Task client (per-provider concurrency lives inside it).
         config: Application configuration.
+        only: Restrict to these corpus paths (a chosen subset); None = all.
 
     Returns:
         A per-run report; per-file failures are captured, not raised.
@@ -188,7 +191,11 @@ async def generate_cards(
         ProviderUnavailableError: A call failed in a way every other card's
             call would too (e.g. no model loaded); remaining cards stop.
     """
-    pending = store.files_needing_cards()
+    pending = [
+        row
+        for row in store.files_needing_cards()
+        if only is None or row.rel_path in only
+    ]
     report = CardReport()
     budget = card_token_budget(config)
 

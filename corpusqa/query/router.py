@@ -108,6 +108,8 @@ async def route(
     store: CatalogStore,
     client: LLMTaskClient,
     config: AppConfig,
+    *,
+    only: frozenset[str] | None = None,
 ) -> list[Candidate]:
     """Selects candidate files for the question via catalog routing.
 
@@ -117,12 +119,13 @@ async def route(
         store: Open catalog store.
         client: Task client.
         config: Application configuration.
+        only: Route among these corpus paths only; None = every file.
 
     Returns:
         Candidates in catalog order. Files the router judged irrelevant are
         excluded; pass 2 corrects any remaining false positives.
     """
-    pairs = store.all_cards()
+    pairs = [(f, c) for f, c in store.all_cards() if only is None or f.rel_path in only]
     if not pairs:
         return []
     rendered = [_render_card(f, c) for f, c in pairs]

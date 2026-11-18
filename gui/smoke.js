@@ -99,6 +99,32 @@ async function run(win, quit) {
 
     await setInput('#folder', env.CORPUSQA_SMOKE_FOLDER);
     await setInput('#question', env.CORPUSQA_SMOKE_QUESTION);
+
+    // Documents: choose two of the folder's documents for this run, using
+    // the filter, Select none / Select all on the shown rows, and one tick.
+    const docText = () => js(`document.getElementById('docs-toggle').textContent`);
+    await wait(`/documents/i.test(document.getElementById('docs-toggle').textContent)`, 10000, 'documents listed');
+    const docsBefore = await docText();
+    await click('#docs-toggle');
+    await wait(`!document.getElementById('docs-panel').hidden && document.querySelectorAll('#docs-panel .doc').length > 0`, 10000, 'documents panel');
+    const docButton = (label) => `[...document.querySelectorAll('#docs-panel .docs-actions button')].find(b => b.textContent === ${JSON.stringify(label)}).click()`;
+    await js(docButton('Select none'));
+    await setInput('#docs-panel .docs-filter', 'joy');
+    const shownWhenFiltered = await js(`document.querySelectorAll('#docs-panel .doc').length`);
+    await js(docButton('Select all'));
+    await setInput('#docs-panel .docs-filter', '');
+    await js(`[...document.querySelectorAll('#docs-panel .doc')].find(d => d.title === 'b_middle.md').querySelector('input').click()`);
+    summary.steps.documents = {
+      before: docsBefore,
+      rows: await js(`[...document.querySelectorAll('#docs-panel .doc')].map(d => d.title + (d.querySelector('input').checked ? ' ✓' : ''))`),
+      shownWhenFiltered,
+      count: await js(`document.querySelector('#docs-panel .docs-count').textContent`),
+    };
+    await shot('0c-documents');
+    await js(`[...document.querySelectorAll('#docs-panel .docs-foot button')].pop().click()`);
+    summary.steps.documents.after = await docText();
+    summary.steps.documents.closed = await js(`document.getElementById('docs-panel').hidden`);
+
     await click('#run');
     const statuses = [];
     const rowCounts = [];
@@ -222,6 +248,15 @@ async function run(win, quit) {
     // Open results: the run just saved a file; reopen it into a fresh view.
     const resultsDir = path.join(env.CORPUSQA_SMOKE_FOLDER, '.corpusqa', 'results');
     const saved = fs.readdirSync(resultsDir).filter((n) => n.endsWith('.json')).sort();
+    const savedRun = JSON.parse(fs.readFileSync(path.join(resultsDir, saved[saved.length - 1]), 'utf8'));
+    summary.steps.documents.savedSelection = savedRun.selection;
+    summary.steps.documents.filesRead = savedRun.files.map((f) => f.rel_path).sort();
+    // Choose all again, so reopening the results has something to restore.
+    await click('#docs-toggle');
+    await wait(`!document.getElementById('docs-panel').hidden`, 5000, 'documents panel again');
+    await js(docButton('Select all'));
+    await js(`[...document.querySelectorAll('#docs-panel .docs-foot button')].pop().click()`);
+    summary.steps.documents.beforeReopen = await docText();
     process.env.CORPUSQA_SMOKE_PICK = path.join(resultsDir, saved[saved.length - 1]);
     const rowsBefore = await js(`document.querySelectorAll('#results li').length`);
     await click('#open-results');
@@ -237,6 +272,8 @@ async function run(win, quit) {
       marked: !!document.querySelector('#reader-doc mark'),
       notice: document.getElementById('reader-notice').hidden ? null : document.getElementById('reader-notice').textContent,
     })`);
+    await wait(`/of 3/.test(document.getElementById('docs-toggle').textContent)`, 5000, 'selection restored');
+    summary.steps.openResults.documents = await docText();
     await shot('3-opened-results');
     delete process.env.CORPUSQA_SMOKE_PICK;
 
@@ -287,6 +324,28 @@ async function run(win, quit) {
       secondsToStop: Math.round((Date.now() - tc) / 100) / 10,
       final: await status(),
     };
+
+    // Wording help: ask the chat model, then use its suggested question.
+    await click('#chat-toggle');
+    await wait(`document.getElementById('chat').classList.contains('open') && document.querySelectorAll('#chat select')[1].value`, 15000, 'chat panel');
+    await setInput('#chat .chat-input', 'Does the text say that the firstborn is the beginning of a man\'s strength because he is the firstborn, or that the child who is the beginning of a man\'s strength is accounted his firstborn? How should I phrase this?');
+    await click('#chat .chat-actions button.primary');
+    const tchat = Date.now();
+    await wait(`document.querySelector('#chat .msg-assistant:not(.msg-pending)') || document.querySelector('#chat .field-error')`, 300000, 'chat reply');
+    const useButtons = await js(`document.querySelectorAll('#chat .suggestion .use').length`);
+    if (useButtons) await click('#chat .suggestion .use');
+    await sleep(300);
+    summary.steps.chat = await js(`({
+      model: document.querySelectorAll('#chat select')[1].value,
+      reply: document.querySelector('#chat .msg-assistant:not(.msg-pending)')?.innerText ?? null,
+      error: document.querySelector('#chat .field-error')?.textContent ?? null,
+      suggestions: [...document.querySelectorAll('#chat .suggestion')].map(s => s.innerText),
+      question: document.getElementById('question').value,
+      definition: document.getElementById('definition').value,
+    })`);
+    summary.steps.chat.seconds = Math.round((Date.now() - tchat) / 1000);
+    summary.steps.chat.used = useButtons > 0;
+    await shot('5-chat');
     summary.ok = true;
   } catch (err) {
     summary.error = String(err && err.stack ? err.stack : err);

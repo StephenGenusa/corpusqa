@@ -54,6 +54,7 @@ class RunStartParams(_Strict):
         mode: ``auto | route | sweep``.
         synthesize: Compose a single cited prose answer.
         use_cache: Reuse persisted evaluations.
+        files: Query only these corpus paths; None means every document.
     """
 
     folder: str
@@ -63,6 +64,51 @@ class RunStartParams(_Strict):
     mode: Literal["auto", "route", "sweep"] = "auto"
     synthesize: bool = False
     use_cache: bool = True
+    files: list[str] | None = Field(default=None, min_length=1)
+
+
+class FilesListParams(_Strict):
+    """``files.list``: the documents in a folder, for choosing a subset."""
+
+    folder: str
+
+
+class ChatMessage(_Strict):
+    """One turn of the wording-help chat."""
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1)
+
+
+class ChatContextParams(_Strict):
+    """The main window's fields when the user asks for wording help."""
+
+    question: str = ""
+    definition: str = ""
+    relevance: str = "recall"
+    mode: str = "auto"
+    synthesize: bool = False
+    documents_chosen: int | None = None
+    documents_total: int | None = None
+    model: str = ""
+
+
+class ChatSendParams(_Strict):
+    """``chat.send``: the conversation so far; replies with the next turn.
+
+    Not saved anywhere: the GUI holds the conversation and resends it.
+
+    Attributes:
+        provider: Key into ``providers`` for the chat model.
+        model: LiteLLM model string.
+        messages: The conversation, oldest first, ending with the user.
+        context: The main window's current fields.
+    """
+
+    provider: str
+    model: str = Field(min_length=1)
+    messages: list[ChatMessage] = Field(min_length=1)
+    context: ChatContextParams = Field(default_factory=ChatContextParams)
 
 
 class CostReplyParams(_Strict):

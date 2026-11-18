@@ -28,8 +28,8 @@ from corpusqa.query.synthesizer import CitedAnswer
 
 _log = logging.getLogger("corpusqa.query")
 
-# 2: adds ``grouping``. Version-1 files (no grouping) still load.
-RESULTS_FORMAT_VERSION = 2
+# 2: adds ``grouping``. 3: adds ``selection``. Older files still load.
+RESULTS_FORMAT_VERSION = 3
 RESULTS_DIR_NAME = "results"
 _SLUG_MAX = 60
 
@@ -148,6 +148,8 @@ class SavedRun(_Model):
         files: Per-file outcomes, in the order they finished.
         answer: Synthesized answer, if any.
         grouping: Distinct answers among the hits, once grouped.
+        selection: The documents chosen for this run, when only some of
+            the folder was queried; None means every document.
     """
 
     format_version: int
@@ -165,6 +167,7 @@ class SavedRun(_Model):
     files: list[SavedFile] = Field(default_factory=list)
     answer: SavedAnswer | None = None
     grouping: SavedGrouping | None = None
+    selection: list[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -229,6 +232,7 @@ class ResultsWriter:
         relevance: str,
         mode: str,
         config: AppConfig,
+        selection: list[str] | None = None,
         now: datetime | None = None,
     ) -> ResultsWriter:
         """Starts a results file for a new run under the corpus.
@@ -240,6 +244,7 @@ class ResultsWriter:
             relevance: Extraction inclusion bar.
             mode: Requested mode.
             config: Configuration the run uses (providers and models recorded).
+            selection: The chosen documents, when only some are queried.
             now: Start time (tests); defaults to the current time.
 
         Returns:
@@ -262,6 +267,7 @@ class ResultsWriter:
             mode_requested=mode,
             corpus=str(corpus_root.resolve()),
             started_at=_iso(started),
+            selection=sorted(selection) if selection is not None else None,
             tasks={
                 task.value: TaskUse(
                     provider=config.tasks[task].provider,

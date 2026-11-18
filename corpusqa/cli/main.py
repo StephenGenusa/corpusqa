@@ -103,6 +103,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "findings) to <directory>/.corpusqa/results/*.json as it goes",
     )
     p_query.add_argument(
+        "--file",
+        action="append",
+        dest="files",
+        metavar="PATH",
+        help="query only this document (path within the directory); repeat "
+        "for several. Default: every document",
+    )
+    p_query.add_argument(
         "--synthesize",
         action="store_true",
         help="compose a single cited prose answer (extra LLM step) instead of "
@@ -325,6 +333,24 @@ class _Progress:
             self._bar = None
 
 
+def _corpus_paths(corpus: Path, given: list[str] | None) -> list[str] | None:
+    """Turns ``--file`` values into corpus-relative paths (None: all files).
+
+    Accepts a path relative to the corpus or one on disk inside it.
+    """
+    if not given:
+        return None
+    root = corpus.resolve()
+    out: list[str] = []
+    for value in given:
+        on_disk = Path(value).resolve()  # relative to the working directory
+        if on_disk.is_file() and on_disk.is_relative_to(root):
+            out.append(on_disk.relative_to(root).as_posix())
+        else:
+            out.append(Path(value).as_posix())  # taken as corpus-relative
+    return out
+
+
 def _cmd_query(args: argparse.Namespace, config: AppConfig) -> int:
     """Runs the full query pipeline and renders the cited answer."""
     import asyncio
@@ -332,6 +358,7 @@ def _cmd_query(args: argparse.Namespace, config: AppConfig) -> int:
     corpus = args.directory
     _warn_drift(corpus, config)
     progress = _Progress()
+    files = _corpus_paths(corpus, args.files)
     saved = None
     if args.save and index_paths(corpus.resolve())[1].exists():
         saved = ResultsWriter.create(
@@ -341,6 +368,7 @@ def _cmd_query(args: argparse.Namespace, config: AppConfig) -> int:
             relevance=args.relevance,
             mode="sweep" if args.all_files else args.mode,
             config=config,
+            selection=files,
         )
     try:
         report = asyncio.run(
@@ -357,6 +385,7 @@ def _cmd_query(args: argparse.Namespace, config: AppConfig) -> int:
                 on_progress=progress,
                 confirm=(lambda e: True) if args.yes else _confirm,
                 results_file=saved,
+                files=files,
             )
         )
     except BudgetExceededError as exc:

@@ -46,6 +46,7 @@ from corpusqa.errors import BudgetExceededError, ConfigError, CorpusQAError
 from corpusqa.gui_backend.env import load_dotenv
 from corpusqa.gui_backend.models import ModelListing, list_models
 from corpusqa.gui_backend.protocol import (
+    ChatSendParams,
     ConfigSaveParams,
     CostConfirmEvent,
     CostReplyParams,
@@ -55,6 +56,7 @@ from corpusqa.gui_backend.protocol import (
     EstimateOut,
     Event,
     FileResultEvent,
+    FilesListParams,
     FindingOut,
     FlagItem,
     FlagsEvent,
@@ -67,10 +69,12 @@ from corpusqa.gui_backend.protocol import (
     ResultsLoadParams,
     RunStartParams,
 )
+from corpusqa.ingest.discovery import INDEX_DIR_NAME
 from corpusqa.ingest.pipeline import index_paths, run_index
 from corpusqa.llm.tasks import LLMTaskClient
 from corpusqa.logging_setup import configure as configure_logging
 from corpusqa.logging_setup import run_log_file
+from corpusqa.prompts.chat import ChatContext, build_system
 from corpusqa.query.budget import CostEstimate
 from corpusqa.query.extractor import ExtractionResult
 from corpusqa.query.grouping import group_answers, source_text_lookup, to_saved
@@ -169,10 +173,14 @@ def _estimate_lines(estimate: CostEstimate) -> list[str]:
 _ROUTE_TASKS = (TaskName.CATALOG_SUMMARIZE, TaskName.QUERY_ROUTE)
 
 
-def _resolve_auto_mode(folder: Path, config: AppConfig) -> str:
+def _resolve_auto_mode(
+    folder: Path, config: AppConfig, files: list[str] | None = None
+) -> str:
     """Resolves ``auto`` exactly as ``run_query`` does, from the catalog."""
     with CatalogStore(index_paths(folder.resolve())[1]) as store:
-        parseable = len(store.all_parseable_files())
+        rows = store.all_parseable_files()
+    wanted = None if files is None else set(files)
+    parseable = sum(1 for r in rows if wanted is None or r.rel_path in wanted)
     return "sweep" if parseable <= config.query.sweep_threshold else "route"
 
 
@@ -215,6 +223,65 @@ def _list_saved(folder: str) -> dict[str, object]:
             for s in list_results(Path(folder))
         ]
     }
+
+
+def _list_files(folder: str, extensions: list[str]) -> dict[str, object]:
+    """Lists a folder's documents for choosing a subset.
+
+    A plain walk (no hashing), so it is quick on a large folder. ``converted``
+    says whether the index already holds the file's text; a file that changed
+    since is still reported converted and is reconverted when queried.
+    """
+    root = Path(folder).resolve()
+    if not root.is_dir():
+        raise CorpusQAError(f"not a folder: {root}")
+    wanted = {e.lower() for e in extensions}
+    known: dict[str, str] = {}
+    db_path = index_paths(root)[1]
+    if db_path.exists():
+        try:
+            with CatalogStore(db_path) as store:
+                known = store.known_files()
+        except sqlite3.Error as exc:
+            _log.warning("cannot read index for %s: %s", root, exc)
+    files = []
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root)
+        if INDEX_DIR_NAME in rel.parts or path.suffix.lower() not in wanted:
+            continue
+        try:
+            if not path.is_file():
+                continue
+            size = path.stat().st_size
+        except OSError:
+            continue
+        rel_path = rel.as_posix()
+        files.append(
+            {"rel_path": rel_path, "size": size, "converted": rel_path in known}
+        )
+    return {"files": files}
+
+
+_CHAT_MAX_TOKENS = 1500
+_CHAT_TEMPERATURE = 0.4
+
+
+def _chat_config(config: AppConfig, provider: str, model: str) -> AppConfig:
+    """A config whose synthesize task is the chat model (not saved)."""
+    if provider not in config.providers:
+        raise CorpusQAError(f"unknown provider '{provider}'")
+    task = config.tasks[TaskName.SYNTHESIZE].model_copy(
+        update={
+            "provider": provider,
+            "model": model,
+            "max_tokens": _CHAT_MAX_TOKENS,
+            "temperature": _CHAT_TEMPERATURE,
+            "fallbacks": [],
+        }
+    )
+    tasks = dict(config.tasks)
+    tasks[TaskName.SYNTHESIZE] = task
+    return config.model_copy(update={"tasks": tasks})
 
 
 def _load_saved(path: str) -> dict[str, object]:
@@ -439,6 +506,8 @@ class Server:
             "results.list": self._results_list,
             "results.load": self._results_load,
             "group.start": self._group_start,
+            "files.list": self._files_list,
+            "chat.send": self._chat_send,
         }
         handler = handlers.get(request.cmd)
         if handler is None:
@@ -501,6 +570,41 @@ class Server:
     async def _results_load(self, request: Request) -> None:
         params = ResultsLoadParams.model_validate(request.params)
         self._reply(request.id, await asyncio.to_thread(_load_saved, params.path))
+
+    async def _files_list(self, request: Request) -> None:
+        params = FilesListParams.model_validate(request.params)
+        config = load_config(self._config_path)
+        self._reply(
+            request.id,
+            await asyncio.to_thread(
+                _list_files, params.folder, config.ingest.extensions
+            ),
+        )
+
+    async def _chat_send(self, request: Request) -> None:
+        """Answers one turn of the wording-help chat (nothing is saved)."""
+        params = ChatSendParams.model_validate(request.params)
+        config = _chat_config(
+            load_config(self._config_path), params.provider, params.model
+        )
+        client = (
+            self._client_factory(config)
+            if self._client_factory
+            else LLMTaskClient(config)
+        )
+        system = build_system(ChatContext(**params.context.model_dump()))
+        messages = [{"role": "system", "content": system}] + [
+            m.model_dump() for m in params.messages
+        ]
+        completion = await client.complete(TaskName.SYNTHESIZE, messages)
+        self._reply(
+            request.id,
+            {
+                "text": completion.text,
+                "model": completion.model,
+                "truncated": completion.finish_reason == "length",
+            },
+        )
 
     async def _run_start(self, request: Request) -> None:
         params = RunStartParams.model_validate(request.params)
@@ -651,6 +755,7 @@ class Server:
             config,
             on_progress=lambda d, t: self._progress("converting", d, t),
             should_stop=self._cancel.is_set,
+            only=None if params.files is None else set(params.files),
         )
         self._phase = "querying"
         self._emit_flags(folder)
@@ -659,7 +764,7 @@ class Server:
 
         mode: str = params.mode
         if mode == "auto":
-            mode = _resolve_auto_mode(folder, config)
+            mode = _resolve_auto_mode(folder, config, params.files)
             if mode == "route":
                 self._phase = "preflight"
                 await self._preflight(config, list(_ROUTE_TASKS))
@@ -673,6 +778,7 @@ class Server:
             relevance=params.relevance,
             mode=params.mode,
             config=config,
+            selection=params.files,
         )
         result = await run_query(
             folder,
@@ -688,6 +794,7 @@ class Server:
             confirm=lambda estimate: self._confirm(run_id, estimate),
             client=client,
             results_file=self._results_file,
+            files=params.files,
         )
         return DoneEvent(
             failures=[*result.card_report.failed, *result.extraction_failures],

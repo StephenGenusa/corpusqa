@@ -52,6 +52,21 @@ per-user app data folder and are seeded from `corpusqa.example.yaml` on first
 launch. Docling downloads its PDF models the first time a PDF is converted.
 LibreOffice, Ollama and LM Studio are not bundled; install them separately.
 
+**Choosing documents.** The **Documents** button beside the folder opens a list of the
+folder's documents with a checkbox each, a filter box, and **Select all** / **Select
+none** (which act on the documents the filter shows, so "1898, Select all" picks a
+year). A run reads only the checked documents and converts only those. The choice is
+remembered per folder on this computer and saved in the run's results file when it is a
+subset, so **Open results…** restores it. From the CLI: `corpusqa query … --file PATH`
+(repeat for several). Earlier readings are cached per document, so a later run over more
+documents with the same question rereads nothing already done.
+
+**Wording help.** The **Wording help** button opens a chat with a model that knows how
+corpusqa reads the documents: one section at a time, judged against the Question and
+Definition. Describe what you want to find and it suggests a Question and Definition,
+each with a button to use it. It sees your current fields and settings; its model is
+chosen in the panel (default: the `synthesize` task's). Nothing in the chat is saved.
+
 **Saved results.** Every GUI run is saved as it goes to
 `<corpus>/.corpusqa/results/<time>-<question>.json`: the question, definition,
 settings, provider and model, each file's verdict, reasoning and findings (with
@@ -223,6 +238,7 @@ corpusqa query "<question>" <dir>
         [--synthesize]                         # compose a cited prose answer (default: show hits)
         [--section-tokens N]                   # override tasks.extract.max_input_tokens (default: fill the window)
         [--save]                               # save the run to <dir>/.corpusqa/results/*.json as it goes
+        [--file PATH]...                       # read only this document; repeat for more (default: all)
         [--no-cache] [--yes] [--show-cost] [--all-files]
 corpusqa summarize [RESULTS.json] [--dir <dir>] # group a saved run's hits into the distinct answers they give
         [--all-hits] [--yes]                   # (default: the newest results file under <dir>)
