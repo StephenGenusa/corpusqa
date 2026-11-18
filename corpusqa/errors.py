@@ -35,17 +35,24 @@ class StructuredOutputError(LLMError):
 
     Attributes:
         raw_output: The final raw model output, retained for logging.
+        output_exhausted: The model used its whole output allowance without
+            writing an answer (e.g. a model that reasons first ran out of
+            room); a larger ``max_tokens`` may succeed.
     """
 
-    def __init__(self, message: str, raw_output: str) -> None:
+    def __init__(
+        self, message: str, raw_output: str, output_exhausted: bool = False
+    ) -> None:
         """Initializes the error.
 
         Args:
             message: Human-readable failure description.
             raw_output: The final raw model output that failed validation.
+            output_exhausted: See the class attributes.
         """
         super().__init__(message)
         self.raw_output = raw_output
+        self.output_exhausted = output_exhausted
 
 
 class BudgetExceededError(CorpusQAError):

@@ -135,6 +135,31 @@ def _try_validate(
         return result
 
 
+def _empty_completion(
+    task: TaskName, completion: Completion, repair: bool = False
+) -> StructuredOutputError:
+    """Explains an empty reply: out of output room, or no room at all."""
+    where = " on the repair attempt" if repair else ""
+    if completion.finish_reason == "length":
+        # Every output token was spent and none is visible: a model that
+        # reasons before answering used the whole allowance thinking.
+        return StructuredOutputError(
+            f"task '{task.value}' spent its whole output allowance "
+            f"({completion.tokens_out} tokens){where} without writing an answer "
+            "(a model that reasons before answering needs a larger max_tokens)",
+            raw_output=completion.text,
+            output_exhausted=True,
+        )
+    return StructuredOutputError(
+        f"task '{task.value}' returned an empty completion{where} "
+        f"(prompt_tokens={completion.tokens_in}, "
+        f"completion_tokens={completion.tokens_out}). This usually means "
+        "the prompt left no room for output in the model's context window; "
+        "lower the task's max_tokens or context_window, or shrink the input.",
+        raw_output=completion.text,
+    )
+
+
 async def complete_structured(
     client: LLMTaskClient,
     task: TaskName,
@@ -197,15 +222,7 @@ async def complete_structured(
         # remain -- local OpenAI-compatible servers tend to return empty
         # content in that case. Fail fast with a diagnosis instead of emitting
         # a misleading "Invalid JSON: EOF" after a wasted retry.
-        raise StructuredOutputError(
-            f"task '{task.value}' returned an empty completion "
-            f"(prompt_tokens={completion.tokens_in}, "
-            f"completion_tokens={completion.tokens_out}). This usually means "
-            "the prompt left no room for output in the model's context window; "
-            "lower the task's max_tokens or context_window, or shrink the "
-            "input.",
-            raw_output=completion.text,
-        )
+        raise _empty_completion(task, completion)
 
     def truncated_kept() -> None:
         _log.warning(
@@ -248,13 +265,7 @@ async def complete_structured(
         on_completion(repaired)
     raw2 = _strip_fences(repaired.text)
     if not raw2:
-        raise StructuredOutputError(
-            f"task '{task.value}' returned an empty completion on the "
-            f"repair attempt (prompt_tokens={repaired.tokens_in}, "
-            f"completion_tokens={repaired.tokens_out}); likely the prompt "
-            "is too large for the model's context window.",
-            raw_output=repaired.text,
-        )
+        raise _empty_completion(task, repaired, repair=True)
     repaired_truncated = repaired.finish_reason == "length"
     validated2 = _try_validate(
         raw2, output_model, truncated_kept if repaired_truncated else None

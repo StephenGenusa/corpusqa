@@ -74,15 +74,19 @@ class _Script(FakeClient):
         super().__init__({})
         self.reply = reply
         self.prompts: list[str] = []
+        self.max_tokens: list[int | None] = []
 
     async def complete(
-        self, task: TaskName, messages: list[dict[str, str]], **_: Any
+        self, task: TaskName, messages: list[dict[str, str]], **kw: Any
     ) -> Completion:
         prompt = messages[-1]["content"]
         self.prompts.append(prompt)
+        self.max_tokens.append(kw.get("max_tokens"))
         out = self.reply(prompt, len(self.prompts))
         if isinstance(out, BaseException):
             raise out
+        if isinstance(out, Completion):
+            return out
         return Completion(
             text=json.dumps(out),
             model="fake",
@@ -313,3 +317,102 @@ def test_grouping_is_saved_into_the_results_file(tmp_path: Path) -> None:
     assert group.answer == "Both" and group.volumes == 1
     assert [(r.file, r.index) for r in group.hits] == [("a", 0), ("a", 1)]
     assert again.files == run.files  # the rest of the file is untouched
+
+
+def test_a_failed_batch_is_split_and_retried_before_giving_up() -> None:
+    run = _run({"a": [_f("one"), _f("two"), _f("three"), _f("four")]})
+
+    def reply(prompt: str, _n: int) -> dict[str, Any]:
+        if "<hits>" in prompt:
+            nums = _numbers(prompt, "")
+            if len(nums) > 2:  # e.g. a reasoning model ran out of output room
+                return {"not": "valid"}
+            return {"groups": [{"answer": "Same", "hits": nums}]}
+        return {"groups": [{"answer": "Same", "statements": _numbers(prompt, "")}]}
+
+    client = _Script(reply)
+    grouping = _go(run, client, _config())
+    assert [h.number for h in grouping.ungrouped] == []
+    assert [h.number for h in grouping.groups[0].hits] == [1, 2, 3, 4]
+    assert grouping.problems == []
+    # the failed call and its repair turn, 2 halves, 1 merge
+    assert len(client.prompts) == 5
+
+
+def test_a_single_hit_that_still_fails_is_reported_not_grouped() -> None:
+    run = _run({"a": [_f("one"), _f("two")]})
+
+    def reply(prompt: str, _n: int) -> Any:  # noqa: ANN401
+        if "<hits>" in prompt and "[2]" in prompt:
+            return {"not": "valid"}
+        if "<hits>" in prompt:
+            return {"groups": [{"answer": "One", "hits": [1]}]}
+        return {"groups": [{"answer": "One", "statements": [1]}]}
+
+    grouping = _go(run, _Script(reply), _config())
+    assert [h.number for h in grouping.ungrouped] == [2]
+    assert len(grouping.problems) == 1 and "not grouped" in grouping.problems[0]
+
+
+def test_hit_numbers_the_model_copies_into_an_answer_are_removed() -> None:
+    run = _run({"a": [_f("one"), _f("two")]})
+
+    def reply(prompt: str, _n: int) -> dict[str, Any]:
+        if "<hits>" in prompt:
+            return {
+                "groups": [{"answer": "Take locks in order [1, 2]", "hits": [1, 2]}]
+            }
+        return {
+            "groups": [{"answer": "Take locks in one order. [1]", "statements": [1]}]
+        }
+
+    grouping = _go(run, _Script(reply), _config())
+    # One statement needs no merge; the first pass's answer is cleaned.
+    assert grouping.groups[0].answer == "Take locks in order"
+
+
+def _thought_too_long(limit: int) -> Completion:
+    """A reasoning model that spent its whole allowance and wrote nothing."""
+    return Completion(
+        text="",
+        model="fake",
+        tokens_in=500,
+        tokens_out=limit,
+        cost_usd=0.0,
+        priced=True,
+        fallback=False,
+        finish_reason="length",
+    )
+
+
+def test_a_call_that_runs_out_of_output_is_retried_with_more_room() -> None:
+    run = _run({"a": [_f("one")], "b": [_f("two")]})
+    config = _config(window=32768, output=2048)
+
+    def reply(prompt: str, n: int) -> Any:  # noqa: ANN401
+        if "<hits>" in prompt:
+            return {
+                "groups": [
+                    {"answer": "One", "hits": [1]},
+                    {"answer": "Two", "hits": [2]},
+                ]
+            }
+        if client.max_tokens[-1] == 2048:
+            return _thought_too_long(2048)
+        return {"groups": [{"answer": "Both", "statements": [1, 2]}]}
+
+    client = _Script(reply)
+    grouping = _go(run, client, config)
+    assert grouping.problems == []
+    assert [g.answer for g in grouping.groups] == ["Both"]
+    # The retry gets what the window leaves after the prompt, not the default.
+    assert client.max_tokens[-1] is not None and client.max_tokens[-1] > 2048
+    assert client.max_tokens[-1] < 32768
+
+
+def test_running_out_of_output_is_explained_as_such() -> None:
+    run = _run({"a": [_f("one")]})
+    client = _Script(lambda _p, _n: _thought_too_long(client.max_tokens[-1] or 0))
+    grouping = _go(run, client, _config())
+    assert grouping.ungrouped and grouping.problems
+    assert "output allowance" in grouping.problems[0]

@@ -23,16 +23,22 @@ call would hit (``ProviderUnavailableError``) stops the whole job.
 from __future__ import annotations
 
 import html
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypeVar
 
 from pydantic import BaseModel, ConfigDict
 
 from corpusqa.config.schema import AppConfig, TaskName
-from corpusqa.errors import CorpusQAError, ProviderUnavailableError
+from corpusqa.errors import (
+    CorpusQAError,
+    ProviderUnavailableError,
+    StructuredOutputError,
+)
 from corpusqa.ingest.pipeline import index_paths
 from corpusqa.llm.pricing import task_rate
 from corpusqa.llm.structured import complete_structured
@@ -49,6 +55,8 @@ from corpusqa.query.results_file import (
 )
 
 # System prompt + JSON schema + question, per call (conservative).
+_log = logging.getLogger("corpusqa.query")
+
 _CALL_OVERHEAD_TOKENS = 1_500
 # Never pack less than this much input, however small the window.
 _MIN_INPUT_TOKENS = 500
@@ -292,10 +300,15 @@ async def group_answers(
     if on_progress is not None:
         on_progress(0, planned)
 
-    # Pass 1: group each batch of units.
+    # Pass 1: group each batch of units. A batch that fails is split in half
+    # and retried: a reasoning model can spend its whole output allowance
+    # thinking about a large batch and return nothing. Only a single unit
+    # that still fails is left ungrouped.
     statements: list[tuple[str, list[int]]] = []  # (answer, unit numbers)
     placed: set[int] = set()
-    for b, batch in enumerate(batches, start=1):
+    pending = list(batches)
+    while pending:
+        batch = pending.pop(0)
         numbers = {units[i][0].number for i in batch}
         messages = [
             {"role": "system", "content": group_prompt.GROUP_SYSTEM},
@@ -307,29 +320,34 @@ async def group_answers(
             },
         ]
         try:
-            reply = await complete_structured(
-                client,
-                TaskName.SYNTHESIZE,
-                messages,
-                _GroupReply,
-                max_tokens=config.query.group_output_tokens,
-            )
+            reply = await _ask(client, config, messages, _GroupReply)
         except ProviderUnavailableError:
             raise
         except CorpusQAError as exc:
-            result.problems.append(
-                f"grouping batch {b} of {len(batches)} failed ({exc}); "
-                "its hits are listed as not grouped"
-            )
             tick()
+            if len(batch) > 1:
+                half = len(batch) // 2
+                _log.info(
+                    "grouping: a batch of %d hits failed (%s); retrying in halves",
+                    len(batch),
+                    exc,
+                )
+                pending[:0] = [batch[:half], batch[half:]]
+                planned += 1  # two calls replace one
+                continue
+            result.problems.append(
+                f"grouping hit {units[batch[0]][0].number} failed ({exc}); "
+                "it is listed as not grouped"
+            )
             continue
         for g in reply.groups:
             mine = [
                 n for n in dict.fromkeys(g.hits) if n in numbers and n not in placed
             ]
-            if mine and g.answer.strip():
+            answer = _clean_answer(g.answer)
+            if mine and answer:
                 placed.update(mine)
-                statements.append((g.answer.strip(), mine))
+                statements.append((answer, mine))
         tick()
 
     # Pass 2: merge statements that mean the same thing.
@@ -350,6 +368,57 @@ async def group_answers(
     if on_progress is not None:
         on_progress(done, done)
     return result
+
+
+_R = TypeVar("_R", bound=BaseModel)
+
+
+async def _ask(
+    client: LLMTaskClient,
+    config: AppConfig,
+    messages: list[dict[str, str]],
+    reply_model: type[_R],
+) -> _R:
+    """One grouping or merging call, with room to finish.
+
+    It first gets ``query.group_output_tokens``. A model that reasons before
+    answering can spend all of that thinking and return nothing; it is then
+    asked once more with all the output room the window leaves after the
+    prompt.
+    """
+    limit = config.query.group_output_tokens
+    try:
+        return await complete_structured(
+            client, TaskName.SYNTHESIZE, messages, reply_model, max_tokens=limit
+        )
+    except StructuredOutputError as exc:
+        if not exc.output_exhausted:
+            raise
+        prompt = sum(
+            client.count_tokens(TaskName.SYNTHESIZE, m["content"]) for m in messages
+        )
+        window = config.tasks[TaskName.SYNTHESIZE].context_window
+        room = window - prompt - _CALL_OVERHEAD_TOKENS
+        if room <= limit:
+            raise
+        _log.info(
+            "grouping: the model used all %d output tokens; retrying with %d",
+            limit,
+            room,
+        )
+        return await complete_structured(
+            client, TaskName.SYNTHESIZE, messages, reply_model, max_tokens=room
+        )
+
+
+# "… in ascending order [3, 4]": the model copies the hits' reference numbers,
+# which mean nothing to the reader; the program keeps the citations itself.
+_HIT_NUMBERS = re.compile(r"\s*[\[(](?:hits?\s*)?\d+(?:\s*[,;]\s*\d+)*[\])]")
+
+
+def _clean_answer(answer: str) -> str:
+    """An answer as shown: hit numbers the model copied in are removed."""
+    return _HIT_NUMBERS.sub("", answer).strip()
 
 
 async def _merge(
@@ -386,13 +455,7 @@ async def _merge(
                 },
             ]
             try:
-                reply = await complete_structured(
-                    client,
-                    TaskName.SYNTHESIZE,
-                    messages,
-                    _MergeReply,
-                    max_tokens=config.query.group_output_tokens,
-                )
+                reply = await _ask(client, config, messages, _MergeReply)
             except ProviderUnavailableError:
                 raise
             except CorpusQAError as exc:
@@ -413,7 +476,7 @@ async def _merge(
                 if not members:
                     continue
                 used.update(members)
-                answer = g.answer.strip() or statements[members[0] - 1][0]
+                answer = _clean_answer(g.answer) or statements[members[0] - 1][0]
                 numbers = [n for s in members for n in statements[s - 1][1]]
                 merged.append((answer, numbers))
             merged.extend(statements[i - 1] for i in sorted(local - used))
