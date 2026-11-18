@@ -51,6 +51,18 @@ CREATE INDEX IF NOT EXISTS idx_eval_lookup
     ON evaluations(question_hash, file_hash, model_used);
 CREATE INDEX IF NOT EXISTS idx_eval_run ON evaluations(run_id);
 
+-- A volume a run could not finish: its finished sections, so the next run
+-- of the same question reads only the rest. Never served as a verdict.
+CREATE TABLE IF NOT EXISTS partial_evaluations (
+    question_hash  TEXT NOT NULL,
+    file_hash      TEXT NOT NULL REFERENCES files(file_hash) ON DELETE CASCADE,
+    model_used     TEXT NOT NULL,
+    run_id         TEXT NOT NULL,
+    sections_key   TEXT NOT NULL,   -- fingerprint of the section split
+    sections_json  TEXT NOT NULL,   -- per section: ExtractionResult or null
+    evaluated_at   TEXT NOT NULL,
+    PRIMARY KEY (question_hash, file_hash, model_used)
+);
 CREATE TABLE IF NOT EXISTS index_meta (
     rowid_one        INTEGER PRIMARY KEY CHECK (rowid_one = 1),
     schema_version   INTEGER NOT NULL,
@@ -336,6 +348,60 @@ class CatalogStore:
         )
         self._conn.commit()
 
+    def get_partial_evaluation(
+        self, question_hash: str, file_hash: str, model: str
+    ) -> tuple[str, str] | None:
+        """Returns ``(sections_key, sections_json)`` of an unfinished volume."""
+        row = self._conn.execute(
+            """SELECT sections_key, sections_json FROM partial_evaluations
+               WHERE question_hash = ? AND file_hash = ? AND model_used = ?""",
+            (question_hash, file_hash, model),
+        ).fetchone()
+        return (row["sections_key"], row["sections_json"]) if row else None
+
+    def put_partial_evaluation(
+        self,
+        run_id: str,
+        question_hash: str,
+        file_hash: str,
+        model: str,
+        sections_key: str,
+        sections_json: str,
+    ) -> None:
+        """Stores (replacing) an unfinished volume's finished sections."""
+        self._conn.execute(
+            """INSERT OR REPLACE INTO partial_evaluations
+               (question_hash, file_hash, model_used, run_id, sections_key,
+                sections_json, evaluated_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (
+                question_hash,
+                file_hash,
+                model,
+                run_id,
+                sections_key,
+                sections_json,
+                _now(),
+            ),
+        )
+        self._conn.commit()
+
+    def delete_partial_evaluation(
+        self, question_hash: str, file_hash: str, model: str
+    ) -> None:
+        """Drops an unfinished volume's sections (it is now complete)."""
+        self._conn.execute(
+            """DELETE FROM partial_evaluations
+               WHERE question_hash = ? AND file_hash = ? AND model_used = ?""",
+            (question_hash, file_hash, model),
+        )
+        self._conn.commit()
+
+    def partial_evaluation_count(self) -> int:
+        """Number of unfinished volumes stored (all questions)."""
+        row = self._conn.execute("SELECT COUNT(*) FROM partial_evaluations").fetchone()
+        return int(row[0])
+
     def evaluations_for_file(self, file_hash: str) -> list[tuple[str, str, str]]:
         """Returns ``(question, evaluated_at, result_json)`` rows, newest first."""
         rows = self._conn.execute(
@@ -352,6 +418,15 @@ class CatalogStore:
                  SELECT run_id FROM (
                    SELECT run_id, MAX(evaluated_at) AS latest
                    FROM evaluations GROUP BY run_id
+                   ORDER BY latest DESC LIMIT ?))""",
+            (keep_runs,),
+        )
+        # Unfinished volumes age out the same way, by their own runs.
+        self._conn.execute(
+            """DELETE FROM partial_evaluations WHERE run_id NOT IN (
+                 SELECT run_id FROM (
+                   SELECT run_id, MAX(evaluated_at) AS latest
+                   FROM partial_evaluations GROUP BY run_id
                    ORDER BY latest DESC LIMIT ?))""",
             (keep_runs,),
         )

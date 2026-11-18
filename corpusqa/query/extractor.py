@@ -13,7 +13,7 @@ import json
 import logging
 import re
 import unicodedata
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 
 from pydantic import BaseModel, Field
 
@@ -123,8 +123,9 @@ class PartialExtractionError(CorpusQAError):
     malformed (only
     the complete leading findings kept). Carries the merged result of what
     survived so callers can still show those findings. The file must be
-    reported as failed and the result never cached: the passage that mattered
-    may be in what was lost.
+    reported as failed and the result never cached as a verdict: the passage
+    that mattered may be in what was lost. ``sections`` says which sections
+    did finish, so a later run can read only the rest.
 
     Attributes:
         result: Merged extraction over what survived.
@@ -133,6 +134,8 @@ class PartialExtractionError(CorpusQAError):
         malformed: Number of sections whose output stayed invalid JSON through
             the repair turn.
         total: Number of sections in the file.
+        sections: Per section, its complete result, or None where the
+            section failed, was truncated or malformed. None when unknown.
     """
 
     def __init__(
@@ -143,6 +146,7 @@ class PartialExtractionError(CorpusQAError):
         last_error: str | None = None,
         truncated: int = 0,
         malformed: int = 0,
+        sections: list[ExtractionResult | None] | None = None,
     ) -> None:
         """Initializes the error with the partial result and loss counts."""
         problems = []
@@ -167,6 +171,7 @@ class PartialExtractionError(CorpusQAError):
         self.truncated = truncated
         self.malformed = malformed
         self.total = total
+        self.sections = sections
 
 
 def extraction_fingerprint() -> str:
@@ -473,6 +478,7 @@ async def extract_file(
     on_section: Callable[[], None] | None = None,
     page_map: PageMap | None = None,
     on_completion: Callable[[Completion], None] | None = None,
+    prior: Sequence[ExtractionResult | None] | None = None,
 ) -> ExtractionResult:
     """Runs pass-2 extraction over one file (sectioned when oversize).
 
@@ -495,6 +501,10 @@ async def extract_file(
             source carries no page provenance (md/txt, scanned).
         on_completion: Called with every LLM completion made for this file,
             e.g. so the caller can tell whether a fallback model served it.
+        prior: Per section, a complete result from an earlier run (or None
+            for a section still to read). Those sections are not sent to
+            the model and do not tick ``on_section``. Ignored unless it has
+            one entry per section.
 
     Returns:
         The merged extraction result. ``relevant`` is True if any section
@@ -513,12 +523,22 @@ async def extract_file(
     # against it to (a) verify and (b) recover real provenance.
     norm_source, source_map = _normalize_for_match(markdown)
 
+    if prior is not None and len(prior) != len(sections):
+        prior = None
     section_results: list[ExtractionResult] = []
+    # Per section: its complete result, or None if it did not finish cleanly.
+    per_section: list[ExtractionResult | None] = []
     section_failures = 0
     last_error: CorpusQAError | None = None
     truncation: list[None] = []  # one entry per section with truncated output
     malformed: list[None] = []  # ...and per section with malformed output
-    for section in sections:
+    for index, section in enumerate(sections):
+        earlier = prior[index] if prior is not None else None
+        if earlier is not None:
+            section_results.append(earlier)
+            per_section.append(earlier)
+            continue
+        defects = len(truncation) + len(malformed)
         messages = _section_messages(
             question, definition_block, rel_path, file_hash, section, relevance
         )
@@ -540,6 +560,7 @@ async def extract_file(
             # findings. Keep going, then report the file as partial below.
             section_failures += 1
             last_error = exc
+            per_section.append(None)
             _log.warning(
                 "extract: skipped a section of %s after structured failure: %s",
                 rel_path,
@@ -551,6 +572,10 @@ async def extract_file(
         result = verdict.to_result(file_hash)
         _snap_findings(result, markdown, norm_source, source_map, page_map)
         section_results.append(result)
+        # Truncated or malformed output keeps its complete findings for this
+        # run, but the section is read again next time.
+        clean = len(truncation) + len(malformed) == defects
+        per_section.append(result if clean else None)
         if on_section is not None:
             on_section()
 
@@ -570,6 +595,7 @@ async def extract_file(
             last_error=str(last_error) if last_error is not None else None,
             truncated=len(truncation),
             malformed=len(malformed),
+            sections=per_section,
         )
     return merged
 

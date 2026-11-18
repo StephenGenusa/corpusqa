@@ -468,6 +468,8 @@ class _Pass2Plan:
     sections: dict[str, list[str]] = field(default_factory=dict)
     page_maps: dict[str, PageMap] = field(default_factory=dict)
     total_calls: int = 0
+    prior: dict[str, list[ExtractionResult | None]] = field(default_factory=dict)
+    calls: dict[str, int] = field(default_factory=dict)
 
 
 def _plan_pass2(
@@ -498,9 +500,53 @@ def _plan_pass2(
         if cached_json is None:
             sections = plan_sections(md, client, config)
             plan.sections[h] = sections
-            plan.section_tokens.append(_token_counts(sections, client))
-            plan.total_calls += len(sections)
+            prior = (
+                _stored_sections(store, question_hash, h, extract_model, sections)
+                if use_cache
+                else None
+            )
+            todo = sections
+            if prior is not None:
+                plan.prior[h] = prior
+                todo = [
+                    s for s, done in zip(sections, prior, strict=True) if done is None
+                ]
+            plan.section_tokens.append(_token_counts(todo, client))
+            plan.calls[h] = len(todo)
+            plan.total_calls += len(todo)
     return plan
+
+
+def _sections_key(sections: list[str]) -> str:
+    """Fingerprint of a section split: stored sections apply only to it."""
+    digest = hashlib.sha256()
+    for section in sections:
+        digest.update(section.encode())
+        digest.update(b"\x00")
+    return digest.hexdigest()
+
+
+def _stored_sections(
+    store: CatalogStore,
+    question_hash: str,
+    file_hash: str,
+    model: str,
+    sections: list[str],
+) -> list[ExtractionResult | None] | None:
+    """Finished sections of an unfinished volume, if they fit this split."""
+    stored = store.get_partial_evaluation(question_hash, file_hash, model)
+    if stored is None or stored[0] != _sections_key(sections):
+        return None
+    try:
+        raw = json.loads(stored[1])
+        prior = [
+            None if item is None else ExtractionResult.model_validate(item)
+            for item in raw
+        ]
+    except (ValueError, TypeError):
+        _log.warning("ignoring unreadable stored sections for %s", file_hash)
+        return None
+    return prior if len(prior) == len(sections) else None
 
 
 @dataclass
@@ -591,7 +637,7 @@ class _Pass2Runner:
             # If the file ended before all its planned sections ticked (e.g. a
             # section raised), credit the remainder so the bar still reaches
             # 100% rather than stalling short.
-            planned = len(self.plan.sections.get(h, ()))
+            planned = self.plan.calls.get(h, 0)
             remaining = planned - self._calls_ticked.get(h, 0)
             if remaining > 0:
                 self._calls_done += remaining
@@ -601,23 +647,51 @@ class _Pass2Runner:
         return (cand.file.rel_path, result)
 
     async def _extract(self, cand: Candidate) -> ExtractionResult:
-        """Runs extraction for one uncached file and caches a clean verdict."""
+        """Runs extraction for one uncached file and caches a clean verdict.
+
+        A partial file's finished sections are stored instead, and a file with
+        stored sections reads only the rest.
+        """
         h = cand.file.file_hash
         fallback_served: list[Completion] = []
-        result = await extract_file(
-            self.question,
-            self.definition,
-            cand.file.rel_path,
-            h,
-            self.plan.markdowns[h],
-            self.client,
-            self.config,
-            relevance=self.relevance,
-            sections=self.plan.sections[h],
-            on_section=functools.partial(self._tick, h),
-            page_map=self.plan.page_maps.get(h),
-            on_completion=lambda c: fallback_served.append(c) if c.fallback else None,
-        )
+        model = self.config.tasks[TaskName.EXTRACT].model
+        sections = self.plan.sections[h]
+        try:
+            result = await extract_file(
+                self.question,
+                self.definition,
+                cand.file.rel_path,
+                h,
+                self.plan.markdowns[h],
+                self.client,
+                self.config,
+                relevance=self.relevance,
+                sections=sections,
+                on_section=functools.partial(self._tick, h),
+                page_map=self.plan.page_maps.get(h),
+                on_completion=lambda c: (
+                    fallback_served.append(c) if c.fallback else None
+                ),
+                prior=self.plan.prior.get(h),
+            )
+        except PartialExtractionError as exc:
+            # Keep the finished sections (never as a verdict) so the next run
+            # of this question reads only the rest.
+            if exc.sections is not None and not fallback_served:
+                self.store.put_partial_evaluation(
+                    self.run_id,
+                    self.question_hash,
+                    h,
+                    model,
+                    _sections_key(sections),
+                    json.dumps(
+                        [
+                            None if r is None else r.model_dump(mode="json")
+                            for r in exc.sections
+                        ]
+                    ),
+                )
+            raise
         # The key names the primary model; a verdict a fallback model
         # produced must not be served as the primary's.
         if not fallback_served:
@@ -625,10 +699,11 @@ class _Pass2Runner:
                 self.run_id,
                 self.question_hash,
                 h,
-                self.config.tasks[TaskName.EXTRACT].model,
+                model,
                 result.model_dump_json(),
                 question=self.question,
             )
+            self.store.delete_partial_evaluation(self.question_hash, h, model)
         return result
 
 
