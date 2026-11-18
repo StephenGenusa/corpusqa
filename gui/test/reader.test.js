@@ -275,13 +275,51 @@ test('buildBlocks keeps a page mark that falls inside an italic span', () => {
   ]);
 });
 
-test('styledRuns styles a quote and leaves a cut-off asterisk as written', () => {
+test('styledRuns styles a quote, including one cut inside an italic phrase', () => {
   const { styledRuns } = require('../src/reader.js');
   assert.deepEqual(styledRuns('cross; *wherefore* God'), [
     { kind: 'text', text: 'cross; ' },
     { kind: 'text', text: 'wherefore', em: true },
     { kind: 'text', text: ' God' },
   ]);
-  assert.deepEqual(styledRuns('wherefore* God'), [{ kind: 'text', text: 'wherefore* God' }]);
+  assert.deepEqual(styledRuns('wherefore* God'), [
+    { kind: 'text', text: 'wherefore', em: true },
+    { kind: 'text', text: ' God' },
+  ]);
   assert.deepEqual(styledRuns(''), []);
+});
+
+test('styledRuns styles a quote that starts or ends inside an italic phrase', () => {
+  const { styledRuns } = require('../src/reader.js');
+  assert.deepEqual(styledRuns('waiteth for the manifestation of* the sons of God.'), [
+    { kind: 'text', text: 'waiteth for the manifestation of', em: true },
+    { kind: 'text', text: ' the sons of God.' },
+  ]);
+  assert.deepEqual(styledRuns('bring hither, and slay before me* .'), [
+    { kind: 'text', text: 'bring hither, and slay before me', em: true },
+    { kind: 'text', text: ' .' },
+  ]);
+  assert.deepEqual(styledRuns('neither shall there be any more *pain'), [
+    { kind: 'text', text: 'neither shall there be any more ' },
+    { kind: 'text', text: 'pain', em: true },
+  ]);
+  assert.deepEqual(styledRuns('he might* destroy that, the *diabolos'), [
+    { kind: 'text', text: 'he might', em: true },
+    { kind: 'text', text: ' destroy that, the ' },
+    { kind: 'text', text: 'diabolos', em: true },
+  ]);
+  // Lone marks and deliberate runs stay as printed.
+  assert.deepEqual(styledRuns('idols * * and Dr. *****. Yours, ***.'), [
+    { kind: 'text', text: 'idols * * and Dr. *****. Yours, ***.' },
+  ]);
+});
+
+test('buildBlocks styles a phrase that runs across a line break', () => {
+  const text = 'with *Proof-Texts\nappended* here';
+  const [block] = buildBlocks(text, 0, text.length, { pageMap: [], highlight: null });
+  assert.deepEqual(block.runs, [
+    { kind: 'text', text: 'with ' },
+    { kind: 'text', text: 'Proof-Texts\nappended', em: true },
+    { kind: 'text', text: ' here' },
+  ]);
 });

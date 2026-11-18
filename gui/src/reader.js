@@ -112,7 +112,8 @@
   // `*italic*`, `**bold**`, `***both***` as the converter writes them: the
   // opening run must be followed, and the closing run preceded, by a
   // non-space, so footnote and omission marks ("idols * * and") stay text.
-  const EMPHASIS = /(?<!\*)(\*{1,3})(?=[^\s*])[^*\n]*?[^\s*]\1(?!\*)/g;
+  // A span may cross a single line break (blocks never hold a blank line).
+  const EMPHASIS = /(?<!\*)(\*{1,3})(?=[^\s*])[^*]*?[^\s*]\1(?!\*)/g;
 
   // Emphasis spans in [from, to): delimiter ranges (hidden) and styled ranges.
   function findEmphasis(text, from, to) {
@@ -174,7 +175,37 @@
 
   /** Emphasis runs for a short standalone text such as a quote. */
   function styledRuns(text) {
-    return text ? makeRuns(text, 0, text.length, [], null) : [];
+    if (!text) return [];
+    const whole = balanceQuote(text);
+    return makeRuns(whole, 0, whole.length, [], null);
+  }
+
+  /**
+   * A quote is copied from the book, where emphasis marks are paired, so a
+   * quote cut inside a phrase holds half a pair: a closing mark with no
+   * opener means the phrase began before the quote, an opening mark with no
+   * closer means it runs past the end. Supplies the missing half (hidden
+   * like any delimiter). Runs of three or more are left alone: the books
+   * also use them as marks ("Yours, ***.").
+   */
+  function balanceQuote(text) {
+    const covered = findEmphasis(text, 0, text.length);
+    const inSpan = (i) => covered.some((s) => i >= s.open && i < s.close);
+    const loose = [];
+    for (const m of text.matchAll(/(?<!\*)\*{1,2}(?!\*)/g)) {
+      if (inSpan(m.index)) continue;
+      const before = text[m.index - 1];
+      const after = text[m.index + m[0].length];
+      const closes = before !== undefined && /[^\s(“‘]/.test(before) && (after === undefined || /[\s.,;:!?)”’—-]/.test(after));
+      const opens = (before === undefined || /[\s(“‘—]/.test(before)) && after !== undefined && /[\p{L}\p{N}“‘(]/u.test(after);
+      if (closes) loose.push({ mark: m[0], closes: true });
+      else if (opens) loose.push({ mark: m[0], closes: false });
+    }
+    let out = text;
+    if (loose.length && loose[0].closes) out = loose[0].mark + out;
+    const last = loose[loose.length - 1];
+    if (last && !last.closes) out += last.mark;
+    return out;
   }
 
   /**
