@@ -109,17 +109,41 @@
     return snapped > end ? snapped : Math.min(text.length, end + step);
   }
 
-  // Splits [start, end) into runs of plain, highlighted and page-mark pieces.
-  function makeRuns(text, from, to, marks, highlight) {
+  // `*italic*`, `**bold**`, `***both***` as the converter writes them: the
+  // opening run must be followed, and the closing run preceded, by a
+  // non-space, so footnote and omission marks ("idols * * and") stay text.
+  const EMPHASIS = /(?<!\*)(\*{1,3})(?=[^\s*])[^*\n]*?[^\s*]\1(?!\*)/g;
+
+  // Emphasis spans in [from, to): delimiter ranges (hidden) and styled ranges.
+  function findEmphasis(text, from, to) {
+    const spans = [];
+    const slice = text.slice(from, to);
+    for (const m of slice.matchAll(EMPHASIS)) {
+      const n = m[1].length;
+      const start = from + m.index;
+      const end = start + m[0].length;
+      spans.push({ open: start, inner: [start + n, end - n], close: end, em: n !== 2, strong: n >= 2 });
+    }
+    return spans;
+  }
+
+  // Splits [start, end) into runs of plain, highlighted and page-mark pieces;
+  // text runs inside emphasis carry `em` / `strong`, and the asterisks go.
+  function makeRuns(text, from, to, marks, highlight, { emphasis = true } = {}) {
     const cuts = new Set([from, to]);
     if (highlight) {
       if (highlight[0] > from && highlight[0] < to) cuts.add(highlight[0]);
       if (highlight[1] > from && highlight[1] < to) cuts.add(highlight[1]);
     }
     for (const [off] of marks) cuts.add(off);
+    const spans = emphasis ? findEmphasis(text, from, to) : [];
+    for (const s of spans) {
+      cuts.add(s.open).add(s.inner[0]).add(s.inner[1]).add(s.close);
+    }
     const points = [...cuts].sort((a, b) => a - b);
     const runs = [];
     let mi = 0;
+    let si = 0;
     for (let i = 0; i < points.length; i++) {
       const p = points[i];
       while (mi < marks.length && marks[mi][0] === p) {
@@ -129,12 +153,21 @@
       if (i + 1 >= points.length) break;
       const q = points[i + 1];
       if (q <= p) continue;
+      while (si < spans.length && spans[si].close <= p) si++;
+      const span = si < spans.length && spans[si].open <= p ? spans[si] : null;
+      if (span && (p < span.inner[0] || p >= span.inner[1])) continue; // a delimiter
       const hl = highlight && p >= highlight[0] && q <= highlight[1];
       const piece = text.slice(p, q);
-      const last = runs[runs.length - 1];
       const kind = hl ? 'hl' : 'text';
-      if (last && last.kind === kind) last.text += piece;
-      else runs.push({ kind, text: piece });
+      const style = {};
+      if (span?.em) style.em = true;
+      if (span?.strong) style.strong = true;
+      const last = runs[runs.length - 1];
+      if (last && last.kind === kind && !last.em === !style.em && !last.strong === !style.strong) {
+        last.text += piece;
+      } else {
+        runs.push({ kind, text: piece, ...style });
+      }
     }
     return runs;
   }
@@ -178,7 +211,9 @@
           blocks.push({ type: 'heading', level: heading[1].length, start: pos, runs });
         } else {
           const type = raw.startsWith('|') || raw.startsWith('```') ? 'pre' : 'para';
-          blocks.push({ type, start: pos, runs: makeRuns(text, pos, paraEnd, inner, highlight) });
+          // Table rows and code are shown as written.
+          const runs = makeRuns(text, pos, paraEnd, inner, highlight, { emphasis: type === 'para' });
+          blocks.push({ type, start: pos, runs });
         }
       }
       // Marks inside the separator attach to the next paragraph.

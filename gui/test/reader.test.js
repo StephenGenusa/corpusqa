@@ -222,3 +222,55 @@ test('decodeEntities turns the converter\'s escapes back into text', () => {
   assert.equal(decodeEntities('&nbsp; & amp; &#xZZ; &#99999999;'), '&nbsp; & amp; &#xZZ; &#99999999;');
   assert.equal(decodeEntities(''), '');
 });
+
+test('buildBlocks turns *x*, **x** and ***x*** into styled runs without the asterisks', () => {
+  const text = 'He *wherefore* and **bold** and ***both***.';
+  const [block] = buildBlocks(text, 0, text.length, { pageMap: [], highlight: null });
+  assert.deepEqual(block.runs, [
+    { kind: 'text', text: 'He ' },
+    { kind: 'text', text: 'wherefore', em: true },
+    { kind: 'text', text: ' and ' },
+    { kind: 'text', text: 'bold', strong: true },
+    { kind: 'text', text: ' and ' },
+    { kind: 'text', text: 'both', em: true, strong: true },
+    { kind: 'text', text: '.' },
+  ]);
+});
+
+test('buildBlocks leaves lone asterisks (footnote and omission marks) alone', () => {
+  const text = 'idols * * and Paine. * The views and 2 * 3 = 6';
+  const [block] = buildBlocks(text, 0, text.length, { pageMap: [], highlight: null });
+  assert.deepEqual(block.runs, [{ kind: 'text', text }]);
+});
+
+test('buildBlocks keeps a highlight that starts inside an italic span', () => {
+  const text = 'so *the joy set* before him';
+  // highlight covers "joy set* before" in stored offsets
+  const [block] = buildBlocks(text, 0, text.length, { pageMap: [], highlight: [8, 23] });
+  assert.deepEqual(block.runs, [
+    { kind: 'text', text: 'so ' },
+    { kind: 'text', text: 'the ', em: true },
+    { kind: 'hl', text: 'joy set', em: true },
+    { kind: 'hl', text: ' before' },
+    { kind: 'text', text: ' him' },
+  ]);
+});
+
+test('buildBlocks styles headings but leaves table rows as written', () => {
+  const text = '## ***The People’s Friend***\n\n| *a* | b |';
+  const blocks = buildBlocks(text, 0, text.length, { pageMap: [], highlight: null });
+  assert.deepEqual(blocks[0].runs, [{ kind: 'text', text: 'The People’s Friend', em: true, strong: true }]);
+  assert.deepEqual(blocks[1].runs, [{ kind: 'text', text: '| *a* | b |' }]);
+});
+
+test('buildBlocks keeps a page mark that falls inside an italic span', () => {
+  const text = 'a *bc de* f';
+  const [block] = buildBlocks(text, 0, text.length, { pageMap: [[6, '9']], highlight: null });
+  assert.deepEqual(block.runs, [
+    { kind: 'text', text: 'a ' },
+    { kind: 'text', text: 'bc ', em: true },
+    { kind: 'page', label: '9' },
+    { kind: 'text', text: 'de', em: true },
+    { kind: 'text', text: ' f' },
+  ]);
+});

@@ -160,6 +160,9 @@ async function run(win, quit) {
         head: document.getElementById('reader-head').innerText,
         paragraphs: document.querySelectorAll('#reader-doc p').length,
         pageMarks: document.querySelectorAll('#reader-doc .page-mark, #reader-doc .page-inline').length,
+        italic: [...document.querySelectorAll('#reader-doc em')].slice(0, 5).map(e => e.textContent),
+        bold: [...document.querySelectorAll('#reader-doc strong')].slice(0, 3).map(e => e.textContent),
+        rawAsterisks: (document.getElementById('reader-doc').textContent.match(/\\*\\S[^*]{0,30}/g) || []).slice(0, 5),
       };
     })()`);
     await shot('2-reader');
