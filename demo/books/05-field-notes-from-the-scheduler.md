@@ -36,7 +36,7 @@ The textbooks give this a name, a *lost update*, and the general class a name to
 
 ### The remedy
 
-The fix, once understood, was a small one. I put a lock around the balance. A *lock*, for those who have not met one, is a flag in shared memory that a task sets before touching some data and clears after. The flag is tested and set in one indivisible instruction, so two tasks cannot both find it clear; if it is already set, the task waits until it is clear. With the lock in place, the first clerk's task sets the flag, reads, adds and writes, and clears the flag. The second clerk's task, finding the flag set, waits a moment and then reads the corrected balance.
+The fix, once understood, was a small one. I put a lock around the balance. A *lock*, for those who have not met one, is a flag in shared memory that a task sets before touching some data and clears after. The flag is tested and set in one indivisible instruction, so two tasks cannot both find it clear; if it is already set, the task waits until it is clear. With the lock in place, the first clerk's task sets the flag, reads, subtracts and writes, and clears the flag. The second clerk's task, finding the flag set, waits a moment and then reads the corrected balance.
 
 The rule I took away is a plain one. **Put a lock around any balance, count or total that more than one task can change, and hold it across the whole read, change and write.** It is not enough to lock the read, and it is not enough to lock the write. The lock must span the whole of the delicate operation, so that no other task can come between its parts.
 

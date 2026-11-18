@@ -1,5 +1,15 @@
 # corpusqa — Corpus Q&A by reading full documents, not ranking fragments, not similarity searches, not top-k
 
+![corpusqa asking eleven books how to prevent race conditions](demo/corpusqa-demo.gif)
+
+*A real run, unedited: the GUI and a small local model (`gemma-4-e4b-it` in LM
+Studio) read an invented shelf of eleven books — eight on concurrency, three
+decoys on networking, keyboards and spreadsheets — for "What do the authors
+recommend for preventing race conditions in concurrent code?" Shown in turn:
+the question, Wording help, choosing documents, reading, the hits beside the
+book, and the hits grouped into distinct answers. The books and the script
+that recorded this are in [`demo/`](demo/).*
+
 It will help if I give some background on why I created this program/library. I wanted to do text analysis — not keyword frequencies, pattern matching, and retrieving chunks based on lexical similarity, but _analysis of ideas_. Traditional RAG definitely has a place, but it was not what I was looking for and there are a lot of open source packages to choose from already. 
 
 I wanted to analyze the text for ideas, for abstractions of ideas, not just words. What I wanted was something that could reason against the context of the documents and identify passages worthy of closer inspection. The program would act as a kind of pre-processor stage for my brain, surfacing insights I might miss — and covering a much larger scope of material than I could process in the same timeframe.

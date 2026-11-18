@@ -88,6 +88,10 @@ function createWindow() {
   if (process.env.CORPUSQA_SMOKE === '1') {
     require('./smoke').run(win, () => app.quit());
   }
+  // README demo recorder (development only; see demo/make_gif.sh).
+  if (process.env.CORPUSQA_DEMO === '1') {
+    require(path.join(__dirname, '..', 'demo', 'record.js')).run(win, () => app.quit());
+  }
 }
 
 ipcMain.handle('backend', async (_e, cmd, params) => {
