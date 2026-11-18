@@ -3,6 +3,8 @@
 
 import { h, clear, fmtInt, fileStem } from './dom.js';
 
+const { decodeEntities } = window.CorpusReader;
+
 const plural = (n, word) => `${fmtInt(n)} ${word}${n === 1 ? '' : 's'}`;
 
 export class GroupsView {
@@ -61,14 +63,14 @@ export class GroupsView {
           h('span', { class: 'row-file', title: r.rel_path, text: fileStem(r.rel_path) }),
           r.page_label ? h('span', { class: 'row-page', text: `· p. ${r.page_label}` }) : null,
           r.verified ? null : h('span', { class: 'badge badge-warn', text: 'unverified' })),
-        h('blockquote', { class: 'row-quote', text: r.quote })));
+        h('blockquote', { class: 'row-quote', text: decodeEntities(r.quote) })));
       hits.append(r.el);
     }
     return h('li', { class: `group ${extra}`.trim() },
       h('details', {},
         h('summary', {},
           number ? h('span', { class: 'group-number', text: number }) : null,
-          h('span', { class: 'group-answer', text: answer }),
+          h('span', { class: 'group-answer', text: decodeEntities(answer) }),
           h('span', { class: 'group-meta', text: meta })),
         hits));
   }

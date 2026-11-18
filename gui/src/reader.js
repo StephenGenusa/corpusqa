@@ -321,7 +321,22 @@
     };
   }
 
+  // The converter escapes these in its markdown (e.g. "&c." -> "&amp;c.").
+  // Stored text and offsets keep the escapes; they are decoded only for
+  // display, after slicing, so offsets into the stored text stay valid.
+  const NAMED = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+
+  /** Decodes the escapes the converter writes; anything else is left as is. */
+  function decodeEntities(text) {
+    return text.replace(/&(amp|lt|gt|quot|apos|#\d{1,7}|#x[0-9a-fA-F]{1,6});/g, (whole, name) => {
+      if (name[0] !== '#') return NAMED[name];
+      const code = name[1] === 'x' ? parseInt(name.slice(2), 16) : parseInt(name.slice(1), 10);
+      return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
+    });
+  }
+
   return {
+    decodeEntities,
     NOT_LOCATED,
     codePointMapper,
     mapDocOffsets,

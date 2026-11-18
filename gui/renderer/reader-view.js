@@ -5,6 +5,7 @@ import { h, clear, call } from './dom.js';
 
 const {
   readerTarget, pageLabelAt, windowAround, extendBefore, extendAfter, buildBlocks, mapDocOffsets,
+  decodeEntities,
 } = window.CorpusReader;
 
 const RADIUS = 20000;
@@ -119,8 +120,8 @@ export class ReaderView {
       const tag = block.type === 'heading' ? `h${Math.min(block.level + 1, 6)}` : block.type === 'pre' ? 'pre' : 'p';
       const el = h(tag, { class: block.type === 'heading' ? 'doc-heading' : null });
       for (const run of block.runs) {
-        if (run.kind === 'text') el.append(run.text);
-        else if (run.kind === 'hl') el.append(h('mark', { class: 'quote-hl', text: run.text }));
+        if (run.kind === 'text') el.append(decodeEntities(run.text));
+        else if (run.kind === 'hl') el.append(h('mark', { class: 'quote-hl', text: decodeEntities(run.text) }));
         else el.append(h('span', { class: 'page-inline', 'aria-label': `page ${run.label}`, text: ` — p. ${run.label} — ` }));
       }
       frag.append(el);

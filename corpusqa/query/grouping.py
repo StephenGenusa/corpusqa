@@ -22,6 +22,7 @@ call would hit (``ProviderUnavailableError``) stops the whole job.
 
 from __future__ import annotations
 
+import html
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -484,13 +485,13 @@ def render_groups(run: SavedRun, quotes_per_group: int | None = 3) -> str:
         f = findings[ref.file][ref.index]
         where = ref.file + (f" p. {f.page_label}" if f.page_label else "")
         flag = "" if f.verified else " (unverified)"
-        return f'     - {where}: "{f.quote}"{flag}'
+        return f'     - {where}: "{html.unescape(f.quote)}"{flag}'
 
     out = [f"Distinct answers to: {run.question}", ""]
     for i, g in enumerate(grouping.groups, start=1):
         n = len(g.hits)
         out.append(
-            f"{i:>3}. {g.answer}  ({n} hit{'s' if n != 1 else ''} in "
+            f"{i:>3}. {html.unescape(g.answer)}  ({n} hit{'s' if n != 1 else ''} in "
             f"{g.volumes} file{'s' if g.volumes != 1 else ''})"
         )
         shown = g.hits if quotes_per_group is None else g.hits[:quotes_per_group]

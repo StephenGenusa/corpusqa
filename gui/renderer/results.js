@@ -2,7 +2,7 @@
 
 import { h, clear, fmtInt, fileStem } from './dom.js';
 
-const { parseCitations, matchCitation } = window.CorpusReader;
+const { parseCitations, matchCitation, decodeEntities } = window.CorpusReader;
 
 const byFile = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 
@@ -74,8 +74,8 @@ export class ResultsView {
     );
     const button = h('button', { type: 'button', class: 'hit', onclick: () => this.select(row) },
       meta,
-      h('blockquote', { class: 'row-quote', text: row.quote }),
-      row.claim ? h('p', { class: 'row-why' }, h('span', { class: 'why', text: 'why: ' }), row.claim) : null,
+      h('blockquote', { class: 'row-quote', text: decodeEntities(row.quote) }),
+      row.claim ? h('p', { class: 'row-why' }, h('span', { class: 'why', text: 'why: ' }), decodeEntities(row.claim)) : null,
     );
     return h('li', {}, button);
   }
@@ -158,7 +158,7 @@ export class ResultsView {
       const p = h('p');
       for (const seg of parseCitations(para, paths)) {
         if (seg.kind === 'text') {
-          p.append(seg.text);
+          p.append(decodeEntities(seg.text));
           continue;
         }
         const idx = matchCitation(seg, this.rows);

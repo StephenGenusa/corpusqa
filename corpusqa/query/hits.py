@@ -13,6 +13,7 @@ evidence; see ``synthesizer.synthesize``.
 
 from __future__ import annotations
 
+import html
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -120,7 +121,8 @@ def render_hits(
             for hit in group:
                 tag = "" if hit.verified else "  (unverified)"
                 page = f" (p.{hit.page_label})" if hit.page_label else ""
-                lines.append(f'    "{hit.quote}"{page}{tag}')
+                # The converter escapes "&", "<", ">"; show the text as printed.
+                lines.append(f'    "{html.unescape(hit.quote)}"{page}{tag}')
                 if hit.claim:
                     lines.append(f"      why it matched: {hit.claim}")
 

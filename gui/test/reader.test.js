@@ -10,6 +10,7 @@ const {
   buildBlocks,
   parseCitations,
   matchCitation,
+  decodeEntities,
 } = require('../src/reader');
 
 test('readerTarget returns notice for unverified finding', () => {
@@ -209,4 +210,15 @@ test('mapDocOffsets converts page_map offsets and keeps a mapper', () => {
   assert.deepEqual(doc.page_map, [[0, '1'], [9, '2']]);
   assert.equal(text.slice(9), 'p2');
   assert.equal(doc.toUnit(7), 9);
+});
+
+
+test('decodeEntities turns the converter\'s escapes back into text', () => {
+  assert.equal(decodeEntities('exalted him,\u2019 &amp;c. (Phil. 2:8)'), 'exalted him,\u2019 &c. (Phil. 2:8)');
+  assert.equal(decodeEntities('a &lt;b&gt; c &#124; d &#x7C; e &quot;f&quot; &apos;g&apos;'), 'a <b> c | d | e "f" \'g\'');
+  // One pass: an escaped escape stays one level escaped.
+  assert.equal(decodeEntities('&amp;lt;'), '&lt;');
+  // Unknown or malformed sequences are left alone.
+  assert.equal(decodeEntities('&nbsp; & amp; &#xZZ; &#99999999;'), '&nbsp; & amp; &#xZZ; &#99999999;');
+  assert.equal(decodeEntities(''), '');
 });
