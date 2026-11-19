@@ -204,10 +204,11 @@ _PUNCT_FOLD = {
     "\u2019": "'",
     "\u201a": "'",
     "\u201b": "'",  # single quotes
-    "\u201c": '"',
-    "\u201d": '"',
-    "\u201e": '"',
-    "\u201f": '"',  # double quotes
+    '"': "'",  # every quote mark folds to ' and is then dropped (_DECORATION)
+    "\u201c": "'",
+    "\u201d": "'",
+    "\u201e": "'",
+    "\u201f": "'",  # double quotes
     "\u2013": "-",
     "\u2014": "-",
     "\u2015": "-",
@@ -215,9 +216,30 @@ _PUNCT_FOLD = {
     "\u00a0": " ",
     "\u2007": " ",
     "\u202f": " ",  # nbsp variants
+    # A slash is how models mark a line break in quoted verse or headings.
+    "/": " ",
 }
+# HTML entities the converted markdown keeps escaped; the model quotes the
+# character itself.
+_ENTITIES = {
+    "&amp;": "&",
+    "&lt;": "<",
+    "&gt;": ">",
+    "&quot;": '"',
+    "&#39;": "'",
+    "&apos;": "'",
+}
+_ENTITY_RE = re.compile("|".join(map(re.escape, _ENTITIES)))
+# Punctuation that never takes a space before it in the match text: Docling
+# writes "*emphasis* ," with one, and the model quotes "emphasis,".
+_NO_SPACE_BEFORE = frozenset(",.;:!?)]([-")
+# ... nor after these: '( *word*' and 'Isaiah.* —The' in the source.
+_NO_SPACE_AFTER = frozenset("([-")
 # Markdown decoration the model omits from quoted text.
-_DECORATION = set("*_`")
+# Quote marks too: models swap " for ' (to avoid escaping it in JSON), and
+# drop or add one at the edge of a partial quotation. Apostrophes go on both
+# sides alike, so "Father's" still matches "Father's".
+_DECORATION = set("*_`'")
 
 # Ellipsis forms used to elide a span inside a quote ("A ... B" / "A … B").
 _ELLIPSIS_RE = re.compile(r"\s*(?:\.\s*\.\s*\.+|\u2026)\s*")
@@ -249,9 +271,10 @@ def _normalize_for_match(text: str) -> tuple[str, list[int]]:
     offset in the source, which is how provenance is recovered.
 
     Folds applied: NFKD plus diacritic removal (handles ligatures like fi and
-    accents), unicode quote/dash/space variants to ASCII, soft hyphens and
-    hyphenated line breaks joined, markdown emphasis dropped, whitespace
-    collapsed, case folded.
+    accents), unicode dash/space variants to ASCII, quote marks dropped,
+    slashes to spaces, HTML entities decoded, soft hyphens and hyphenated
+    line breaks joined, markdown emphasis dropped, whitespace collapsed and
+    dropped around punctuation that does not need it, case folded.
     """
     out: list[str] = []
     idx: list[int] = []
@@ -275,6 +298,10 @@ def _normalize_for_match(text: str) -> tuple[str, list[int]]:
         if ch == "\u00ad":  # soft hyphen
             i += 1
             continue
+        step = 1
+        if ch == "&" and (entity := _ENTITY_RE.match(text, i)):
+            ch = _ENTITIES[entity.group(0)]
+            step = len(entity.group(0))
         for dec in unicodedata.normalize("NFKD", ch):
             if unicodedata.combining(dec):  # drop accents/marks
                 continue
@@ -282,16 +309,19 @@ def _normalize_for_match(text: str) -> tuple[str, list[int]]:
             if dec in _DECORATION:
                 continue
             if dec.isspace():
-                if not prev_space and out:
+                if not prev_space and out and out[-1] not in _NO_SPACE_AFTER:
                     out.append(" ")
                     idx.append(i)
                     prev_space = True
                 continue
+            if dec in _NO_SPACE_BEFORE and out and out[-1] == " ":
+                out.pop()
+                idx.pop()
             for folded in dec.casefold():
                 out.append(folded)
                 idx.append(i)
             prev_space = False
-        i += 1
+        i += step
     while out and out[-1] == " ":  # drop any trailing space, keeping idx aligned
         out.pop()
         idx.pop()

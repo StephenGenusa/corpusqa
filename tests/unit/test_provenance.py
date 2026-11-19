@@ -65,6 +65,50 @@ def test_paraphrase_does_not_verify() -> None:
     assert not _spans("a bodily law that pollutes and ruins all of humankind")
 
 
+# Differences seen in real unverified quotes: the model's wording is the
+# source's, but its surface differs from the converted markdown.
+_HYMN = (
+    'He said, "The joy that was set before him\n'
+    "was the *kingdom of the twelve tribes* , restored &amp; glorious.\n"
+    'Then cometh the end."\n'
+    'They called it "the joy of the Lord" in every age of the church.\n'
+    "Hence, \u201c *the obedience of faith* \u201d is made the condition ( *homologia*"
+    " not pistis) of righteousness.* \u2014The first ten verses of this chapter.\n"
+)
+
+
+@pytest.mark.parametrize(
+    "quote",
+    [
+        # Single quotes where the source has double quotes (the model avoids
+        # escaping " inside its JSON string).
+        "They called it 'the joy of the Lord' in every age of the church",
+        # A slash marking a line break.
+        "The joy that was set before him / was the kingdom of the twelve tribes",
+        # Docling puts a space before punctuation after emphasis.
+        "was the kingdom of the twelve tribes, restored & glorious",
+        # An escaped entity in the markdown, plain in the quote.
+        "of the twelve tribes , restored & glorious. Then cometh the end",
+        # A quote mark dropped at the edge of a partial quotation.
+        "the joy of the Lord in every age of the church",
+        # Spaces inside quote marks and brackets around emphasis.
+        'Hence, "the obedience of faith" is made the condition (homologia not pistis)',
+        # Spacing around a dash.
+        "of righteousness.\u2014 The first ten verses of this chapter",
+    ],
+)
+def test_surface_differences_still_verify(quote: str) -> None:
+    spans = _spans(quote, _HYMN)
+    assert spans, quote
+    assert all(_HYMN[s:e] in _HYMN for s, e in spans)
+
+
+def test_changed_words_still_do_not_verify() -> None:
+    assert not _spans(
+        "He said, 'The hope that was put before him was the kingdom", _HYMN
+    )
+
+
 def test_page_at_bisects() -> None:
     pm = [(0, "1"), (80, "2"), (200, "5")]
     assert _page_at(pm, 0) == "1"

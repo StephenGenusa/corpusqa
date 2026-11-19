@@ -64,8 +64,8 @@ def test_page_map_anchors_mid_sentence_and_defaults_page_one(tmp_path: Path) -> 
 
 
 def test_anchoring_tolerates_markdown_escaping(tmp_path: Path) -> None:
-    src = make_docx(tmp_path, ["intro", "BM:vp_10_2", "snake_case “quoted” word"])
-    md = 'intro\n\nsnake\\_case "quoted" word'
+    src = make_docx(tmp_path, ["intro", "BM:vp_10_2", "snake_case “quoted” word here"])
+    md = 'intro\n\nsnake\\_case "quoted" word here'
     pm = build_docx_page_map(src, md)
     assert [label for _, label in pm] == ["1", "2"]
     assert md[pm[1][0] :].startswith("snake")
