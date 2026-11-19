@@ -280,7 +280,7 @@ async def run_query(
 
         if all_files:
             mode = "sweep"
-        question_hash = _question_hash(question, definition, relevance, config)
+        question_hash = make_question_hash(question, definition, relevance, config)
 
         with CatalogStore(db_path) as store:
             parseable = _restrict(store.all_parseable_files(), files)
@@ -374,7 +374,7 @@ def _token_counts(sections: list[str], client: LLMTaskClient) -> list[int]:
     return [client.count_tokens(TaskName.EXTRACT, s) for s in sections]
 
 
-def _question_hash(
+def make_question_hash(
     question: str, definition: str | None, relevance: str, config: AppConfig
 ) -> str:
     """Evaluation-cache key for one question under the current setup.

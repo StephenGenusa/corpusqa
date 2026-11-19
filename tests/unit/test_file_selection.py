@@ -251,3 +251,41 @@ def test_saved_selection_survives_a_reload(tmp_path: Path) -> None:
     )
     assert json.loads(w.path.read_text())["selection"] == ["a.md", "b.md"]
     assert load_results(w.path).selection == ["a.md", "b.md"]
+
+
+# -- cache.count ----------------------------------------------------------------
+
+
+def _count(folder: Path, **over: object) -> dict[str, object]:
+    params: dict[str, object] = {"folder": str(folder), "question": "what ideas exist?"}
+    params.update(over)
+    return {"id": "n", "cmd": "cache.count", "params": params}
+
+
+def test_cache_count_reports_reusable_readings(
+    three_docs: Path, tmp_path: Path, harness: Callable[..., Harness]
+) -> None:
+    fake = FakeClient({TaskName.EXTRACT: [_extraction(), _extraction(False)]})
+    h = harness(_write_config(tmp_path), client=fake)
+    h.send(_start(three_docs, files=["gardens.md", "rivers.md"]))
+    h.event("done")
+
+    h.send(_count(three_docs))
+    assert h.reply("n")["result"] == {"complete": 2, "partial": 0}
+    h.clear()
+    h.send(_count(three_docs, files=["rivers.md", "vol/hills.md"]))
+    assert h.reply("n")["result"] == {"complete": 1, "partial": 0}
+    # Another question, definition or relevance is another cache key.
+    for over in ({"question": "other?"}, {"definition": "x"}, {"relevance": "strict"}):
+        h.clear()
+        h.send(_count(three_docs, **over))
+        assert h.reply("n")["result"] == {"complete": 0, "partial": 0}, over
+
+
+def test_cache_count_of_an_unindexed_folder_is_zero(
+    three_docs: Path, tmp_path: Path, harness: Callable[..., Harness]
+) -> None:
+    h = harness(_write_config(tmp_path))
+    h.send(_count(three_docs))
+    assert h.reply("n")["result"] == {"complete": 0, "partial": 0}
+    assert not (three_docs / ".corpusqa").exists()

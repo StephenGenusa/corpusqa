@@ -89,6 +89,9 @@ async function run(win, quit) {
 
     // Run: capture it part way, with the time left showing.
     await click('#run');
+    // Readings from an earlier take are stored; read them again.
+    await sleep(1500);
+    await js(`document.getElementById('cache-dialog').open && document.getElementById('cache-again').click(); true`);
     await wait(`document.body.dataset.runState === 'running'`, 15000, 'run start');
     await wait(`/Reading .* left/.test(document.getElementById('status-text').textContent) && (parseFloat(document.getElementById('bar-fill').style.width) || 0) >= 35`, 900000, 'progress');
     await shot('reading');
@@ -125,6 +128,10 @@ async function run(win, quit) {
       } catch (err) {
         log.errors.push(`settings not restored: ${err}`);
       }
+      // Chromium writes localStorage to disk lazily; quitting right after
+      // the restore could lose it and leave the test's settings (cache off)
+      // in place for the next real run.
+      wc.session.flushStorageData();
     }
     fs.writeFileSync(path.join(out, 'record.json'), JSON.stringify(log, null, 2));
     quit();

@@ -46,6 +46,7 @@ from corpusqa.errors import BudgetExceededError, ConfigError, CorpusQAError
 from corpusqa.gui_backend.env import load_dotenv
 from corpusqa.gui_backend.models import ModelListing, list_models
 from corpusqa.gui_backend.protocol import (
+    CacheCountParams,
     ChatSendParams,
     ConfigSaveParams,
     CostConfirmEvent,
@@ -78,7 +79,7 @@ from corpusqa.prompts.chat import ChatContext, build_system
 from corpusqa.query.budget import CostEstimate
 from corpusqa.query.extractor import ExtractionResult
 from corpusqa.query.grouping import group_answers, source_text_lookup, to_saved
-from corpusqa.query.pipeline import _load_page_map, run_query
+from corpusqa.query.pipeline import _load_page_map, make_question_hash, run_query
 from corpusqa.query.results_file import (
     ResultsWriter,
     SavedRun,
@@ -224,6 +225,18 @@ def _list_saved(folder: str) -> dict[str, object]:
             for s in list_results(Path(folder))
         ]
     }
+
+
+def _count_stored(
+    folder: str, qhash: str, model: str, files: list[str] | None
+) -> dict[str, int]:
+    """``cache.count``'s reply; zeros when the folder has no index yet."""
+    db_path = index_paths(Path(folder).resolve())[1]
+    complete = partial = 0
+    if db_path.exists():
+        with CatalogStore(db_path) as store:
+            complete, partial = store.stored_readings(qhash, model, files)
+    return {"complete": complete, "partial": partial}
 
 
 def _list_files(folder: str, extensions: list[str]) -> dict[str, object]:
@@ -508,6 +521,7 @@ class Server:
             "results.load": self._results_load,
             "group.start": self._group_start,
             "files.list": self._files_list,
+            "cache.count": self._cache_count,
             "chat.send": self._chat_send,
         }
         handler = handlers.get(request.cmd)
@@ -579,6 +593,25 @@ class Server:
             request.id,
             await asyncio.to_thread(
                 _list_files, params.folder, config.ingest.extensions
+            ),
+        )
+
+    async def _cache_count(self, request: Request) -> None:
+        """Counts the stored readings a run of this question could reuse.
+
+        The GUI asks before a run with the cache off, so turning it off by
+        mistake cannot silently throw away hours of finished reading.
+        """
+        params = CacheCountParams.model_validate(request.params)
+        config = load_config(self._config_path)
+        qhash = make_question_hash(
+            params.question, params.definition, params.relevance, config
+        )
+        model = config.tasks[TaskName.EXTRACT].model
+        self._reply(
+            request.id,
+            await asyncio.to_thread(
+                _count_stored, params.folder, qhash, model, params.files
             ),
         )
 

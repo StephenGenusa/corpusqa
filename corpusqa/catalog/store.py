@@ -397,6 +397,37 @@ class CatalogStore:
         )
         self._conn.commit()
 
+    def stored_readings(
+        self, question_hash: str, model: str, rel_paths: list[str] | None = None
+    ) -> tuple[int, int]:
+        """Counts stored readings of the indexed files for one question.
+
+        Only rows for a file's current hash count: a changed file is read
+        again with or without the cache.
+
+        Args:
+            question_hash: The evaluation-cache key of the question.
+            model: The extract model the readings were made with.
+            rel_paths: Count only these files; None counts every indexed file.
+
+        Returns:
+            ``(complete, partial)``: whole volumes stored, and volumes with
+            only some sections stored.
+        """
+        counts = []
+        for table in ("evaluations", "partial_evaluations"):
+            rows = self._conn.execute(
+                f"""SELECT f.rel_path FROM {table} e
+                    JOIN files f ON f.file_hash = e.file_hash
+                    WHERE e.question_hash = ? AND e.model_used = ?""",  # noqa: S608 -- fixed table names
+                (question_hash, model),
+            ).fetchall()
+            paths = {r["rel_path"] for r in rows}
+            if rel_paths is not None:
+                paths &= set(rel_paths)
+            counts.append(len(paths))
+        return counts[0], counts[1]
+
     def partial_evaluation_count(self) -> int:
         """Number of unfinished volumes stored (all questions)."""
         row = self._conn.execute("SELECT COUNT(*) FROM partial_evaluations").fetchone()

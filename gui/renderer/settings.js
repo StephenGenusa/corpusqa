@@ -170,6 +170,12 @@ export class SettingsDrawer {
     saveLocal(QUERY_KEY, this.query);
   }
 
+  /** Sets a run option from outside the drawer and shows the change. */
+  setQueryOption(key, value) {
+    this._setQuery(key, value);
+    if (this.config) this._render();
+  }
+
   _field(path, label, { type = 'text', optional = false, hint = null, placeholder = '' } = {}) {
     const current = getPath(this.config, path);
     const input = h('input', {

@@ -25,6 +25,8 @@ const els = {
   restart: $('restart'), errorDismiss: $('error-dismiss'), notices: $('notices'),
   costDialog: $('cost-dialog'), costTotal: $('cost-total'), costLines: $('cost-lines'),
   costProceed: $('cost-proceed'), costCancel: $('cost-cancel'),
+  cacheDialog: $('cache-dialog'), cacheText: $('cache-text'),
+  cacheUse: $('cache-use'), cacheAgain: $('cache-again'), cacheCancel: $('cache-cancel'),
   docsToggle: $('docs-toggle'), chatToggle: $('chat-toggle'),
 };
 
@@ -529,6 +531,7 @@ async function startRun() {
   els.run.disabled = true;
   try {
     if (!(await saveSelection())) return;
+    if (!(await checkCacheOff(folder, question))) return;
     saveLocal('corpusqa.folder', folder);
     saveLocal('corpusqa.question', els.question.value);
     saveLocal('corpusqa.definition', els.definition.value);
@@ -569,6 +572,49 @@ async function startRun() {
   } finally {
     els.run.disabled = false;
   }
+}
+
+/**
+ * With the cache off, asks before a run that would read again volumes
+ * already read for this question (hours of work on a large folder).
+ * @returns {Promise<boolean>} false when the run should not start
+ */
+async function checkCacheOff(folder, question) {
+  if (drawer.queryOptions().use_cache) return true;
+  let stored;
+  try {
+    stored = await call('cache.count', {
+      folder, question, definition: els.definition.value.trim() || null,
+      relevance: drawer.queryOptions().relevance, files: docs.chosenList(),
+    });
+  } catch {
+    return true; // cannot tell; the run reports its own problems
+  }
+  const n = stored.complete + stored.partial;
+  if (!n) return true;
+  const what = stored.partial
+    ? `${fmtInt(stored.complete)} volume${stored.complete === 1 ? '' : 's'} already read, and ${fmtInt(stored.partial)} partly read,`
+    : `${fmtInt(stored.complete)} volume${stored.complete === 1 ? '' : 's'} already read`;
+  els.cacheText.textContent = `${what} for this question with this model will be read again from the start. `
+    + 'Use the cache to keep that work and read only the rest.';
+  const choice = await new Promise((resolve) => {
+    const done = (value) => {
+      els.cacheDialog.close();
+      resolve(value);
+    };
+    els.cacheUse.onclick = () => done('use');
+    els.cacheAgain.onclick = () => done('again');
+    els.cacheCancel.onclick = () => done('cancel');
+    els.cacheDialog.oncancel = (e) => {
+      e.preventDefault();
+      done('cancel');
+    };
+    els.cacheDialog.showModal();
+    els.cacheUse.focus();
+  });
+  if (choice === 'use') drawer.setQueryOption('use_cache', true);
+  if (choice === 'cancel') setStatus('Not started');
+  return choice !== 'cancel';
 }
 
 els.run.addEventListener('click', startRun);

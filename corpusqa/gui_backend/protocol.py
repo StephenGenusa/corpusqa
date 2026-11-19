@@ -67,6 +67,16 @@ class RunStartParams(_Strict):
     files: list[str] | None = Field(default=None, min_length=1)
 
 
+class CacheCountParams(_Strict):
+    """``cache.count``: stored readings a run of this question could reuse."""
+
+    folder: str
+    question: str = Field(min_length=1)
+    definition: str | None = None
+    relevance: Literal["recall", "balanced", "strict"] = "recall"
+    files: list[str] | None = None
+
+
 class FilesListParams(_Strict):
     """``files.list``: the documents in a folder, for choosing a subset."""
 

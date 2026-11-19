@@ -133,6 +133,9 @@ async function run(win, quit) {
     summary.steps.documents.closed = await js(`document.getElementById('docs-panel').hidden`);
 
     await click('#run');
+    // A rerun on the same folder has stored readings; read them again.
+    await sleep(1500);
+    await js(`document.getElementById('cache-dialog').open && document.getElementById('cache-again').click(); true`);
     const statuses = [];
     const rowCounts = [];
     const etas = [];
@@ -334,8 +337,13 @@ async function run(win, quit) {
     summary.steps.group.seconds = Math.round((Date.now() - tg) / 1000);
     await shot('3b-grouped');
 
-    // Cancel: start again (cache off) and cancel once reading starts.
+    // Cancel: start again (cache off) and cancel once reading starts. The
+    // first run's readings are stored, so the app asks first.
     await click('#run');
+    await wait(`document.getElementById('cache-dialog').open`, 10000, 'cache-off question');
+    summary.steps.cacheOffQuestion = await js(`document.getElementById('cache-text').textContent`);
+    await shot('3c-cache-off');
+    await click('#cache-again');
     await wait(`document.body.dataset.runState === 'running'`, 10000, 'second run');
     await wait(`/^Reading|^Converting/.test(document.getElementById('status-text').textContent) || document.body.dataset.runState !== 'running'`, 120000, 'progress');
     const statusAtCancel = await status();
@@ -381,6 +389,10 @@ async function run(win, quit) {
       } catch (err) {
         summary.settingsRestoreError = String(err);
       }
+      // Chromium writes localStorage to disk lazily; quitting right after
+      // the restore could lose it and leave the test's settings (cache off)
+      // in place for the next real run.
+      wc.session.flushStorageData();
     }
     if (env.CORPUSQA_SMOKE_OUT) fs.writeFileSync(env.CORPUSQA_SMOKE_OUT, JSON.stringify(summary, null, 2));
     quit();
