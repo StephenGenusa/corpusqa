@@ -1,0 +1,40 @@
+{
+  "_comment": "Licence texts for bundled Python packages whose wheels ship none. A \"text\" is the project's LICENSE file, fetched from the source repository named here; a \"note\" is used instead where the licence is a vendor agreement published only on the web. scripts/build_notices.py fails the build for any bundled package that has neither its own licence file nor an entry here.",
+  "packages": {
+    "antlr4-python3-runtime": {
+      "license": "BSD-3-Clause",
+      "text": "texts/antlr4-python3-runtime-LICENSE.txt",
+      "source": "https://github.com/antlr/antlr4/blob/dev/LICENSE.txt"
+    },
+    "cuda-toolkit": {
+      "license": "NVIDIA CUDA Toolkit EULA",
+      "note": "Redistributed under the NVIDIA CUDA Toolkit End User License Agreement, https://docs.nvidia.com/cuda/eula/index.html. Bundled only in builds made with --torch cuda.",
+      "source": "https://developer.nvidia.com/cuda-toolkit"
+    },
+    "docling": {
+      "license": "MIT",
+      "text": "texts/docling-LICENSE.txt",
+      "source": "https://github.com/docling-project/docling/blob/main/LICENSE"
+    },
+    "latex2mathml": {
+      "license": "MIT",
+      "text": "texts/latex2mathml-LICENSE.txt",
+      "source": "https://github.com/roniemartinez/latex2mathml/blob/master/LICENSE"
+    },
+    "nvidia-cusparselt-cu13": {
+      "license": "NVIDIA proprietary (cuSPARSELt)",
+      "note": "Redistributed under the NVIDIA cuSPARSELt license agreement, https://docs.nvidia.com/cuda/cusparselt/license.html. Bundled only in builds made with --torch cuda.",
+      "source": "https://developer.nvidia.com/cusparselt"
+    },
+    "rapidocr": {
+      "license": "Apache-2.0",
+      "text": "texts/rapidocr-LICENSE.txt",
+      "source": "https://github.com/RapidAI/RapidOCR/blob/main/LICENSE"
+    },
+    "tokenizers": {
+      "license": "Apache-2.0",
+      "text": "texts/tokenizers-LICENSE.txt",
+      "source": "https://github.com/huggingface/tokenizers/blob/main/LICENSE"
+    }
+  }
+}

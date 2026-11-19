@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import time
+import tomllib
 import venv
 from pathlib import Path
 
@@ -29,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VENV_DIR = ROOT / "build" / "backend-venv"
 DIST_DIR = ROOT / "dist" / "corpusqa-backend"
 SPEC = ROOT / "packaging" / "backend.spec"
+NOTICES = ROOT / "dist" / "THIRD_PARTY_NOTICES.txt"
 TORCH_INDEX = {
     "cpu": "https://download.pytorch.org/whl/cpu",
     "cuda": "https://download.pytorch.org/whl/cu128",
@@ -191,7 +193,43 @@ def build(torch: str, unpinned: bool = False) -> Path:
     exe = DIST_DIR / ("corpusqa-backend.exe" if os.name == "nt" else "corpusqa-backend")
     if not exe.is_file():
         raise SystemExit(f"error: PyInstaller did not produce {exe}")
+    _write_notices(python, constraints is not None)
     return exe
+
+
+def _write_notices(python: Path, pinned: bool) -> None:
+    """Writes the licence notices of what was bundled (see build_notices.py).
+
+    Run with the build venv's interpreter, so it reads the licences of the
+    installed versions. A pinned build lists the runtime dependencies from
+    ``uv.lock``; an unpinned one has no lock export and covers every package
+    in the venv instead (some build tools too, which is harmless).
+    """
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    args: list[str | Path] = [
+        python,
+        ROOT / "scripts" / "build_notices.py",
+        "--out",
+        NOTICES,
+        "--version",
+        version["project"]["version"],
+    ]
+    uv = shutil.which("uv")
+    if pinned and uv:
+        reqs = ROOT / "build" / "runtime-requirements.txt"
+        _run(
+            uv,
+            "export",
+            "--frozen",
+            "--no-hashes",
+            "--no-dev",
+            "--no-emit-project",
+            "--quiet",
+            "-o",
+            reqs,
+        )
+        args += ["--requirements", reqs]
+    _run(*args)
 
 
 def main(argv: list[str] | None = None) -> int:

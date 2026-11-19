@@ -21,4 +21,6 @@ contextBridge.exposeInMainWorld('corpusqa', {
   restartBackend: () => ipcRenderer.invoke('backend-restart'),
   /** Reveals the config file (and its `.env`) in the file manager. */
   openConfigFolder: () => ipcRenderer.invoke('open-config-folder'),
+  /** Opens the third-party licence notices; resolves to false when absent. */
+  openNotices: () => ipcRenderer.invoke('open-notices'),
 });

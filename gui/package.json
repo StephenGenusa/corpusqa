@@ -40,6 +40,10 @@
       {
         "from": "../corpusqa.example.yaml",
         "to": "corpusqa.example.yaml"
+      },
+      {
+        "from": "../dist/THIRD_PARTY_NOTICES.txt",
+        "to": "THIRD_PARTY_NOTICES.txt"
       }
     ],
     "linux": {

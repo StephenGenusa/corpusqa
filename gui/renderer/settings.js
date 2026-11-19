@@ -127,6 +127,16 @@ export class SettingsDrawer {
           text: 'Open config folder',
           onclick: () => window.corpusqa.openConfigFolder(),
         }),
+        h('button', {
+          type: 'button',
+          title: 'Licences of the software bundled with corpusqa',
+          text: 'Licences',
+          onclick: async () => {
+            if (!(await window.corpusqa.openNotices())) {
+              this.status.textContent = 'No licence notices: they are written when the app is built.';
+            }
+          },
+        }),
         this.status,
         h('button', { type: 'button', class: 'primary', text: 'Save', disabled: !this.config, onclick: () => this.save() }),
       ),

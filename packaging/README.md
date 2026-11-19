@@ -63,6 +63,24 @@ the default because it is several times smaller; build with CUDA only if
 first-time PDF conversion speed matters more than download size. Switching
 variants reinstalls torch in the build venv.
 
+## Licence notices
+
+`build_backend.py` ends by running `scripts/build_notices.py` with the build
+venv's interpreter, which writes `dist/THIRD_PARTY_NOTICES.txt`; electron-builder
+ships it in the app's resources, and Settings → **Licences** opens it. It
+holds corpusqa's licence, then an index and the full licence texts of the
+Python interpreter, PyInstaller (its bootloader starts the backend) and every
+bundled Python package at the installed version. Electron's and Chromium's
+licences are shipped by electron-builder next to the executable
+(`LICENSE.electron.txt`, `LICENSES.chromium.html`).
+
+Texts come from each package's `.dist-info`. A few wheels ship none; their
+texts are in `packaging/notices/texts/`, listed in
+`packaging/notices/overrides.json` with the repository each came from. The
+build stops, naming the package, if a bundled package has neither, for
+example after a dependency upgrade adds one. Add its LICENSE file there and
+an entry to `overrides.json`.
+
 ## App icon
 
 `gui/assets/icon.svg` is the source. electron-builder makes the Windows

@@ -122,6 +122,16 @@ ipcMain.handle('open-config-folder', () => {
   return configPath;
 });
 
+// Licence notices: shipped with the app; in development, the copy the last
+// backend build wrote (scripts/build_backend.py).
+ipcMain.handle('open-notices', async () => {
+  const file = app.isPackaged
+    ? path.join(process.resourcesPath, 'THIRD_PARTY_NOTICES.txt')
+    : path.join(REPO_ROOT, 'dist', 'THIRD_PARTY_NOTICES.txt');
+  if (!fs.existsSync(file)) return false;
+  return (await shell.openPath(file)) === '';
+});
+
 /**
  * The first of `candidates` that is an existing folder, with a trailing
  * separator: without one GTK opens the parent and treats the last part as a
