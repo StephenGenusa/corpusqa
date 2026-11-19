@@ -112,7 +112,7 @@ folder** shows the folder in the file manager.
 ## Releases on GitHub
 
 `.github/workflows/release.yml` builds on `ubuntu-22.04`, `windows-2022` and
-`macos-14` (Apple silicon). Each job runs `build_backend.py`, checks that the
+`macos-15` (Apple silicon). Each job runs `build_backend.py`, checks that the
 frozen backend answers a `config.get` request, then runs electron-builder.
 
 - **Build only:** Actions → Release → Run workflow. The installers are kept

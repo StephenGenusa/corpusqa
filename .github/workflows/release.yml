@@ -33,7 +33,7 @@ jobs:
           - { name: linux, os: ubuntu-22.04 }
           - { name: windows, os: windows-2022 }
           # Apple silicon; PyTorch no longer ships Intel macOS wheels.
-          - { name: macos, os: macos-14 }
+          - { name: macos, os: macos-15 }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     defaults:
@@ -60,7 +60,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
 
       - uses: actions/setup-node@v4
         with:
