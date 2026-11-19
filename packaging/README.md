@@ -5,8 +5,9 @@ library, Docling, LiteLLM) is frozen with PyInstaller and shipped inside the
 Electron app as `resources/backend/`.
 
 Builds are per OS. PyInstaller does not cross-compile, so build the Linux
-installers on Linux and the Windows installer on Windows, with the same two
-commands.
+installers on Linux, the Windows installer on Windows and the macOS app on a
+Mac, with the same two commands. GitHub Actions can build all three for you
+(see "Releases on GitHub" below).
 
 ## Requirements
 
@@ -37,8 +38,13 @@ the script prints its size and build time. Rerunning reuses the venv.
 `npm run dist` runs electron-builder, which copies `dist/corpusqa-backend/`
 and `corpusqa.example.yaml` into the app's resources. Output in `gui/dist/`:
 
-- Linux: `corpusqa-<version>.AppImage` and `corpusqa-gui_<version>_amd64.deb`
-- Windows: `corpusqa Setup <version>.exe` (NSIS)
+- Linux: `corpusqa-<version>-linux-x86_64.AppImage` and
+  `corpusqa-<version>-linux-amd64.deb`
+- Windows: `corpusqa-<version>-windows-x64-setup.exe` (NSIS)
+- macOS: `corpusqa-<version>-macos-arm64.dmg` and `.zip` (Apple silicon only,
+  because PyTorch no longer ships Intel macOS wheels). The app is ad-hoc
+  signed (`mac.identity: "-"`), which Apple silicon requires before it will
+  run anything, but it is not signed with a Developer ID or notarized.
 
 Typical sizes for a CPU build on Linux: backend folder about 1.6 GB,
 AppImage about 630 MB, `.deb` about 490 MB.
@@ -49,6 +55,7 @@ AppImage about 630 MB, `.deb` about 490 MB.
 python scripts/build_backend.py --torch cuda
 ```
 
+CUDA is not available on macOS; the build stops if you ask for it there.
 PyTorch is used only by Docling's PDF layout and table models. `.docx` and
 text conversion do not use it, each file is converted once and cached, and
 the LLM runs in Ollama or LM Studio on the GPU either way. The CPU build is
@@ -86,6 +93,7 @@ program:
 |---------|---------------------------------------------------|
 | Linux   | `~/.config/corpusqa-gui/` (or `$XDG_CONFIG_HOME`) |
 | Windows | `%APPDATA%\corpusqa-gui\`                         |
+| macOS   | `~/Library/Application Support/corpusqa-gui/`     |
 
 On first launch the app copies the bundled example to `corpusqa.yaml` there;
 it never overwrites an existing one. Put API keys in `.env` in the same
@@ -100,6 +108,30 @@ folder** shows the folder in the file manager.
 - **Docling's PDF layout models.** They are downloaded from Hugging Face into
   the user cache on the first PDF conversion. `.docx` and text files need
   no download.
+
+## Releases on GitHub
+
+`.github/workflows/release.yml` builds on `ubuntu-22.04`, `windows-2022` and
+`macos-14` (Apple silicon). Each job runs `build_backend.py`, checks that the
+frozen backend answers a `config.get` request, then runs electron-builder.
+
+- **Build only:** Actions → Release → Run workflow. The installers are kept
+  as workflow artifacts for 7 days.
+- **Release:** bump `version` in both `pyproject.toml` and
+  `gui/package.json`, commit, then push a matching tag:
+
+  ```
+  git tag v0.1.0 && git push origin v0.1.0
+  ```
+
+  The release is published only if all three builds succeed. It holds the
+  installers, `SHA256SUMS.txt`, and `packaging/release-notes.md` as the
+  description. That file explains how to open an unsigned app on each OS. If
+  the tag doesn't match both versions, the build stops.
+
+No signing certificates are used. To sign later, add electron-builder's
+`CSC_LINK`/`CSC_KEY_PASSWORD` secrets for Windows. For macOS, add a Developer
+ID certificate and notarization credentials, then remove `identity: "-"`.
 
 ## Checking a build
 

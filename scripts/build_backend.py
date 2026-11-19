@@ -138,6 +138,8 @@ def build(torch: str, unpinned: bool = False) -> Path:
     Returns:
         The backend executable.
     """
+    if torch == "cuda" and sys.platform == "darwin":
+        raise SystemExit("error: PyTorch has no CUDA build for macOS; use --torch cpu")
     # First, so a missing uv stops the build before any venv or download.
     constraints = _lock_constraints(unpinned)
     if not VENV_DIR.exists():
@@ -149,7 +151,10 @@ def build(torch: str, unpinned: bool = False) -> Path:
     pinned: tuple[str | Path, ...] = ("-c", constraints) if constraints else ()
 
     installed = _installed_torch(python)
-    is_cuda = installed is not None and "+cpu" not in installed
+    # macOS wheels carry no "+cpu" suffix and are never CUDA.
+    is_cuda = (
+        installed is not None and "+cpu" not in installed and sys.platform != "darwin"
+    )
     if installed is not None and is_cuda != (torch == "cuda"):
         # Switching variants: pip would otherwise keep the installed one.
         _run(*pip, "uninstall", "-y", "torch", "torchvision")

@@ -56,8 +56,9 @@ findings appear as each file finishes. The first step is labelled "Converting
 documents" (the incremental conversion of new or changed files). It uses the same
 `corpusqa.yaml` as the CLI, so settings saved in either place apply to both.
 
-**Packaged app** (built as described in `packaging/README.md`): an AppImage or
-`.deb` on Linux, an NSIS installer on Windows. The config and `.env` live in the
+**Packaged app** (download from the GitHub Releases page, or build it as described
+in `packaging/README.md`): an AppImage or `.deb` on Linux, an NSIS installer on
+Windows, a `.dmg` for Apple silicon Macs. The config and `.env` live in the
 per-user app data folder and are seeded from `corpusqa.example.yaml` on first
 launch. Docling downloads its PDF models the first time a PDF is converted.
 LibreOffice, Ollama and LM Studio are not bundled; install them separately.

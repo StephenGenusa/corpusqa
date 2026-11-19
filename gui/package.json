@@ -28,16 +28,50 @@
       "package.json"
     ],
     "extraResources": [
-      { "from": "../dist/corpusqa-backend", "to": "backend" },
-      { "from": "../corpusqa.example.yaml", "to": "corpusqa.example.yaml" }
+      {
+        "from": "../dist/corpusqa-backend",
+        "to": "backend"
+      },
+      {
+        "from": "../corpusqa.example.yaml",
+        "to": "corpusqa.example.yaml"
+      }
     ],
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "category": "Office",
-      "maintainer": "Stephen Genusa"
+      "maintainer": "Stephen Genusa",
+      "artifactName": "corpusqa-${version}-linux-${arch}.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "artifactName": "corpusqa-${version}-macos-${arch}.${ext}",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
     },
     "win": {
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ],
+      "artifactName": "corpusqa-${version}-windows-${arch}-setup.${ext}"
     }
   }
 }
