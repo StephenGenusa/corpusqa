@@ -9,7 +9,7 @@ import { DocumentsPanel } from './files.js';
 import { ChatPanel } from './chat.js';
 
 const TASK_NAMES = ['catalog_summarize', 'query_route', 'extract', 'synthesize'];
-const { OTHER, modelOptions } = window.CorpusModelOptions;
+const { OTHER, modelOptions, selectionChanges } = window.CorpusModelOptions;
 const { EtaEstimator, fmtRemaining } = window.CorpusEta;
 const $ = (id) => document.getElementById(id);
 
@@ -37,6 +37,7 @@ const state = {
   timer: null,
   phase: '',
   models: new Map(), // provider -> Promise<{models, error}>
+  restored: null, // {question, definition} last filled in from a saved run
   pendingCost: null,
   selectionDirty: false, // top-bar provider/model edited but not yet saved
   runError: false,
@@ -170,8 +171,9 @@ function showModelError(message) {
 }
 
 /**
- * Saves the top-bar provider/model to all four tasks. Only a choice the user
- * made in the top bar is saved, so a mixed per-task setup is left alone.
+ * Saves the top-bar provider/model to all four tasks, with a context window
+ * that fits the model (see selectionChanges). Only a choice the user made in
+ * the top bar is saved, so a mixed per-task setup is left alone.
  */
 async function saveSelection() {
   if (!state.config) return false;
@@ -182,12 +184,8 @@ async function saveSelection() {
     showModelError('Choose or type a model.');
     return false;
   }
-  const changes = [];
-  for (const t of TASK_NAMES) {
-    const cfg = state.config.tasks[t];
-    if (cfg.model !== model) changes.push([['tasks', t, 'model'], model]);
-    if (cfg.provider !== provider) changes.push([['tasks', t, 'provider'], provider]);
-  }
+  const listing = await getModels(provider);
+  const changes = selectionChanges(state.config.tasks, TASK_NAMES, provider, model, listing);
   if (!changes.length) {
     state.selectionDirty = false;
     return true;
@@ -256,18 +254,52 @@ async function loadConfig() {
 // ---- folder and query options --------------------------------------------
 
 els.folder.value = loadLocal('corpusqa.folder', '');
+els.question.value = loadLocal('corpusqa.question', '');
 els.definition.value = loadLocal('corpusqa.definition', '');
-els.folder.addEventListener('change', () => {
-  saveLocal('corpusqa.folder', els.folder.value.trim());
-  docs.load(els.folder.value.trim());
-});
+
+/**
+ * Fills the Question and Definition from the folder's latest saved run, so
+ * choosing a folder picks up where its last run left off. Only fields that
+ * are empty, or still hold what an earlier restore put there, are replaced:
+ * a question being typed is never lost.
+ */
+async function restoreLastQuestion(folder) {
+  if (!folder || state.running) return;
+  let listed;
+  try {
+    ({ results: listed } = await call('results.list', { folder }));
+  } catch {
+    return; // not a folder (yet); the Documents button reports that
+  }
+  const last = listed[0];
+  if (!last || folder !== els.folder.value.trim() || state.running) return;
+  const prev = state.restored;
+  const untouched = !els.question.value.trim()
+    || (prev && els.question.value === prev.question && els.definition.value === prev.definition);
+  if (!untouched || els.question.value === last.question) return;
+  els.question.value = last.question;
+  els.definition.value = last.definition || '';
+  state.restored = { question: els.question.value, definition: els.definition.value };
+  saveLocal('corpusqa.question', els.question.value);
+  saveLocal('corpusqa.definition', els.definition.value);
+  setStatus(`Question from this folder's last run (${new Date(last.started_at).toLocaleString()}). `
+    + 'Open results… shows its findings.');
+}
+
+function folderChosen(folder) {
+  saveLocal('corpusqa.folder', folder);
+  docs.load(folder);
+  restoreLastQuestion(folder);
+}
+
+els.folder.addEventListener('change', () => folderChosen(els.folder.value.trim()));
+els.question.addEventListener('change', () => saveLocal('corpusqa.question', els.question.value));
 els.definition.addEventListener('change', () => saveLocal('corpusqa.definition', els.definition.value));
 els.browse.addEventListener('click', async () => {
   const picked = await window.corpusqa.pickFolder(els.folder.value.trim());
   if (picked) {
     els.folder.value = picked;
-    saveLocal('corpusqa.folder', picked);
-    docs.load(picked);
+    folderChosen(picked);
   }
 });
 els.question.addEventListener('keydown', (e) => {
@@ -301,6 +333,8 @@ function showSavedRun(run, sources, path) {
   els.folder.value = run.corpus;
   els.question.value = run.question;
   els.definition.value = run.definition || '';
+  saveLocal('corpusqa.question', els.question.value);
+  saveLocal('corpusqa.definition', els.definition.value);
   const failures = [];
   for (const f of run.files) {
     if (f.status === 'failed' || f.status === 'partial') failures.push([f.rel_path, f.error || f.status]);
@@ -496,6 +530,7 @@ async function startRun() {
   try {
     if (!(await saveSelection())) return;
     saveLocal('corpusqa.folder', folder);
+    saveLocal('corpusqa.question', els.question.value);
     saveLocal('corpusqa.definition', els.definition.value);
     hideError();
     clear(els.notices);
@@ -640,6 +675,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 docs.load(els.folder.value.trim());
+restoreLastQuestion(els.folder.value.trim()); // only when nothing was remembered
 
 loadConfig().finally(() => {
   document.body.dataset.ready = '1';

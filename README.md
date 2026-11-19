@@ -85,6 +85,8 @@ pages and positions), the synthesized answer, and whether the run finished, was
 cancelled or failed. **Open results…** loads one back without any model calls;
 if a document has changed since, its quotes are shown without highlighting and
 the app says why. `corpusqa query … --save` writes the same file from the CLI.
+The app remembers the last Question and Definition between sessions. Choosing a
+folder while the Question box is empty fills both in from that folder's latest run.
 
 **Group answers.** Many hits often give the same answer in different words. After a
 run (or on opened results), **Group answers** sorts the hits into the distinct answers

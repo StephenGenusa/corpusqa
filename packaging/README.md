@@ -63,6 +63,16 @@ the default because it is several times smaller; build with CUDA only if
 first-time PDF conversion speed matters more than download size. Switching
 variants reinstalls torch in the build venv.
 
+## App icon
+
+`gui/assets/icon.svg` is the source. electron-builder makes the Windows
+`.ico` and macOS `.icns` from `gui/assets/icon.png` (1024×1024). After
+editing the SVG, render the PNG again:
+
+```
+rsvg-convert -w 1024 -h 1024 gui/assets/icon.svg -o gui/assets/icon.png
+```
+
 ## Design notes
 
 - **Onedir, not onefile.** A onefile build unpacks its whole contents

@@ -176,6 +176,7 @@ class ResultsSummary:
 
     path: Path
     question: str
+    definition: str | None
     started_at: str
     outcome: str
     files: int
@@ -429,6 +430,7 @@ def list_results(corpus_root: Path) -> list[ResultsSummary]:
             ResultsSummary(
                 path=path,
                 question=run.question,
+                definition=run.definition,
                 started_at=run.started_at,
                 outcome=run.outcome,
                 files=len(run.files),

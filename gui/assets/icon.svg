@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- corpusqa: an open book with one passage highlighted, as the reader shows a finding. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8d5627"/>
+      <stop offset="1" stop-color="#6a3e1a"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="url(#bg)"/>
+  <!-- pages -->
+  <path d="M512 300 C430 250 300 240 200 262 L200 742 C300 720 430 730 512 780 Z" fill="#fbfaf6"/>
+  <path d="M512 300 C594 250 724 240 824 262 L824 742 C724 720 594 730 512 780 Z" fill="#efebe2"/>
+  <path d="M512 300 L512 780" stroke="#c9bfae" stroke-width="10"/>
+  <!-- lines of text, left page -->
+  <g stroke="#9a9184" stroke-width="22" stroke-linecap="round">
+    <path d="M262 352 L452 368"/>
+    <path d="M262 420 L452 434"/>
+    <path d="M262 556 L452 568"/>
+    <path d="M262 624 L400 634"/>
+  </g>
+  <!-- the highlighted passage -->
+  <path d="M244 470 L470 486 L470 524 L244 510 Z" fill="#f2b84b"/>
+  <path d="M262 490 L452 502" stroke="#6a3e1a" stroke-width="22" stroke-linecap="round"/>
+  <!-- lines of text, right page -->
+  <g stroke="#9a9184" stroke-width="22" stroke-linecap="round">
+    <path d="M572 368 L762 352"/>
+    <path d="M572 434 L762 420"/>
+    <path d="M572 502 L762 490"/>
+    <path d="M572 568 L762 556"/>
+    <path d="M572 634 L700 624"/>
+  </g>
+</svg>

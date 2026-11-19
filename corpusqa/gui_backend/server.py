@@ -215,6 +215,7 @@ def _list_saved(folder: str) -> dict[str, object]:
             {
                 "path": str(s.path),
                 "question": s.question,
+                "definition": s.definition,
                 "started_at": s.started_at,
                 "outcome": s.outcome,
                 "files": s.files,
@@ -820,7 +821,7 @@ class Server:
     ) -> None:
         listings: dict[str, ModelListing] = {}
         noticed: set[tuple[str, int]] = set()
-        for task in (config.tasks[t] for t in tasks):
+        for name, task in ((t, config.tasks[t]) for t in tasks):
             provider = config.providers[task.provider]
             if provider_kind(task.provider, provider) != "lm_studio":
                 continue
@@ -856,9 +857,9 @@ class Server:
                 if have is not None and have < want:
                     raise _PreflightError(
                         f"LM Studio loaded {model} with a {have}-token context; "
-                        f"corpusqa is set to {want}. Reload it in LM Studio with "
-                        "at least "
-                        f"{want}, or lower Context window in Settings."
+                        f"the {name.value} task's Context window is {want}. "
+                        f"Reload the model in LM Studio with at least {want}, "
+                        f"or lower that task's Context window in Settings."
                     )
             elif (model, want) not in noticed:
                 # Load state unknown (an LM Studio without /api/v0).

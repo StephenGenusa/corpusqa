@@ -105,6 +105,7 @@ async function run(win, quit) {
 
     await setInput('#folder', env.CORPUSQA_SMOKE_FOLDER);
     await setInput('#question', env.CORPUSQA_SMOKE_QUESTION);
+    await setInput('#definition', ''); // not a remembered one from real use
 
     // Documents: choose two of the folder's documents for this run, using
     // the filter, Select none / Select all on the shown rows, and one tick.
@@ -282,6 +283,22 @@ async function run(win, quit) {
     summary.steps.openResults.documents = await docText();
     await shot('3-opened-results');
     delete process.env.CORPUSQA_SMOKE_PICK;
+
+    // Choosing the folder again with empty fields brings back its last
+    // run's question and definition.
+    await setInput('#question', '');
+    await setInput('#definition', '');
+    await setInput('#folder', '');
+    await setInput('#folder', env.CORPUSQA_SMOKE_FOLDER);
+    await wait(`document.getElementById('question').value !== ''`, 10000, 'question restored');
+    summary.steps.restoredQuestion = await js(`({
+      question: document.getElementById('question').value,
+      definition: document.getElementById('definition').value,
+      status: document.getElementById('status-text').textContent,
+      remembered: localStorage.getItem('corpusqa.question'),
+    })`);
+    summary.steps.restoredQuestion.matches = summary.steps.restoredQuestion.question === savedRun.question
+      && summary.steps.restoredQuestion.definition === (savedRun.definition || '');
 
     // Group answers on the opened results; the Answers tab shows the groups.
     const tg = Date.now();

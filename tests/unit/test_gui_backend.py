@@ -513,6 +513,8 @@ def test_lm_studio_context_too_small_errors_before_work(
     events = h.events()
     assert events[0]["event"] == "error"
     assert "4096" in events[0]["message"] and "16384" in events[0]["message"]
+    # Names the task, since each task has its own Context window.
+    assert "extract task's Context window" in events[0]["message"]
     assert not any(e["event"] == "progress" for e in events)
 
 
@@ -975,6 +977,7 @@ def test_run_saves_a_results_file_and_reports_its_path(
     listed = h.reply("l")["result"]["results"]
     assert [r["path"] for r in listed] == [str(path)]
     assert listed[0]["outcome"] == "finished" and listed[0]["findings"] == 1
+    assert listed[0]["definition"] == "community food"
 
     h.send({"id": "o", "cmd": "results.load", "params": {"path": str(path)}})
     loaded = h.reply("o")["result"]

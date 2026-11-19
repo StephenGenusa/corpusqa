@@ -1,6 +1,6 @@
 {
   "name": "corpusqa-gui",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Desktop GUI for corpusqa",
   "author": "Stephen Genusa",
@@ -19,13 +19,18 @@
   "build": {
     "appId": "com.corpusqa.gui",
     "productName": "corpusqa",
+    "directories": {
+      "buildResources": "assets"
+    },
+    "icon": "assets/icon.png",
     "files": [
       "main.js",
       "preload.js",
       "smoke.js",
       "src/**",
       "renderer/**",
-      "package.json"
+      "package.json",
+      "assets/icon.png"
     ],
     "extraResources": [
       {

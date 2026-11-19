@@ -62,5 +62,39 @@
     return { options, listed };
   }
 
-  return { OTHER, modelNote, modelOptions };
+  /**
+   * Config changes that move every task to the top bar's provider and model.
+   *
+   * A task that changes model also gets a context window that fits the new
+   * model: its old one belonged to the old model (the example config gives
+   * hosted models 200,000 or 1,000,000 tokens, far more than a local model
+   * holds). The window is the one LM Studio has the model loaded with when
+   * it says so; otherwise the extract task's (the window users tune), capped
+   * at the model's maximum when the provider reports one. Tasks already on
+   * this model are left alone.
+   *
+   * @param {Object<string, {provider: string, model: string, context_window: number}>} tasks
+   * @param {string[]} names task names, in order
+   * @param {string} provider
+   * @param {string} model
+   * @param {{models?: object[]}} [listing] the provider's models.list result
+   * @returns {[string[], *][]} [keyPath, value] pairs for config.save
+   */
+  function selectionChanges(tasks, names, provider, model, listing) {
+    const info = ((listing && listing.models) || []).find((m) => m.id === model);
+    let window = tasks.extract.context_window;
+    if (info && info.loaded_context) window = info.loaded_context;
+    else if (info && info.max_context) window = Math.min(window, info.max_context);
+    const changes = [];
+    for (const t of names) {
+      const cfg = tasks[t];
+      if (cfg.model === model && cfg.provider === provider) continue;
+      if (cfg.model !== model) changes.push([['tasks', t, 'model'], model]);
+      if (cfg.provider !== provider) changes.push([['tasks', t, 'provider'], provider]);
+      if (cfg.context_window !== window) changes.push([['tasks', t, 'context_window'], window]);
+    }
+    return changes;
+  }
+
+  return { OTHER, modelNote, modelOptions, selectionChanges };
 });

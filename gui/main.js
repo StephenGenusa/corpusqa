@@ -69,6 +69,8 @@ function createWindow() {
     minHeight: 560,
     show: false,
     title: 'corpusqa',
+    // Windows and macOS take the icon from the packaged app; Linux needs it set.
+    icon: path.join(__dirname, 'assets', 'icon.png'),
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#1b1a18' : '#f6f3ec',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
