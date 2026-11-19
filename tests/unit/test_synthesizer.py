@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
+import types
+
+from corpusqa.config.schema import TaskName
 from corpusqa.query.extractor import ExtractionResult, Finding
 from corpusqa.query.synthesizer import (
+    CiteRef,
     number_evidence,
     render_cite,
     resolve_citations,
     sources_block,
+    synthesize,
 )
+from tests.unit.fakes import FakeClient
 
 
 def _results() -> list[tuple[str, ExtractionResult]]:
@@ -67,3 +74,75 @@ def test_unresolvable_number_marks_uncited() -> None:
     assert "[uncited]" in text
     assert bad and "ghost" in bad[0]
     assert used == set()
+
+
+# --- the finding behind each citation ---------------------------------------
+
+
+def _same_place() -> list[tuple[str, ExtractionResult]]:
+    """Three findings in one file and section, the middle a repeat of the first."""
+
+    def finding(claim: str, quote: str) -> Finding:
+        return Finding(
+            claim=claim, quote=quote, heading_path=["Sermon"], page_label="250"
+        )
+
+    return [
+        (
+            "vol.docx",
+            ExtractionResult(
+                file_hash="h",
+                relevant=True,
+                confidence=0.9,
+                findings=[
+                    finding("dominion", "all peoples"),
+                    finding("dominion again", "all  peoples"),
+                    finding("inheritance", "all things"),
+                ],
+            ),
+        )
+    ]
+
+
+def test_evidence_records_the_findings_place_in_its_file() -> None:
+    evidence = number_evidence(_same_place())
+    # The repeat is collapsed; the third finding keeps its own position.
+    assert [(e.number, e.index) for e in evidence] == [(1, 0), (2, 2)]
+
+
+def test_findings_that_render_alike_keep_a_citation_each() -> None:
+    evidence = number_evidence(_same_place())
+    assert render_cite(evidence[0]) == render_cite(evidence[1])
+    cited: list = []
+    text, *_ = resolve_citations(
+        "He inherits [2]. All of it [1, 2, 1].", evidence, cited
+    )
+    cite = "[vol.docx § Sermon, p.250]"
+    assert text == f"He inherits {cite}. All of it {cite} {cite}."
+    assert [e.index for e in cited] == [2, 0, 2]
+
+
+def test_synthesize_returns_the_cited_findings_in_order() -> None:
+    fake = FakeClient({TaskName.SYNTHESIZE: ["Things [2] and peoples [1]."]})
+    config = types.SimpleNamespace(
+        tasks={
+            TaskName.SYNTHESIZE: types.SimpleNamespace(
+                context_window=8000, max_tokens=512
+            )
+        }
+    )
+    answer = asyncio.run(synthesize("q", _same_place(), fake, config))  # type: ignore[arg-type]
+    assert answer.citations == [CiteRef("vol.docx", 2), CiteRef("vol.docx", 0)]
+
+
+def test_fallback_digest_records_its_citations() -> None:
+    fake = FakeClient({TaskName.SYNTHESIZE: [""]})
+    config = types.SimpleNamespace(
+        tasks={
+            TaskName.SYNTHESIZE: types.SimpleNamespace(
+                context_window=8000, max_tokens=512
+            )
+        }
+    )
+    answer = asyncio.run(synthesize("q", _same_place(), fake, config))  # type: ignore[arg-type]
+    assert answer.citations == [CiteRef("vol.docx", 0), CiteRef("vol.docx", 2)]

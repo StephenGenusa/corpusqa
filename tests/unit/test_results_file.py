@@ -17,7 +17,7 @@ from corpusqa.query.results_file import (
     list_results,
     load_results,
 )
-from corpusqa.query.synthesizer import CitedAnswer
+from corpusqa.query.synthesizer import CitedAnswer, CiteRef
 
 EXAMPLE = Path(__file__).resolve().parents[2] / "corpusqa.example.yaml"
 _WHEN = datetime(2026, 11, 17, 14, 25, 3, tzinfo=UTC)
@@ -97,15 +97,17 @@ def test_answer_mode_and_outcome(tmp_path: Path) -> None:
     w.set_mode("sweep")
     w.set_answer(
         CitedAnswer(
-            text="It was the kingdom [1].",
+            text="It was the kingdom [a.docx § H, p.418].",
             sources="[1] a.docx p. 418",
             uncited_claims=[],
+            citations=[CiteRef("a.docx", 0)],
         )
     )
     w.finish("cancelled", "stopped by user")
     run = load_results(w.path)
     assert run.mode == "sweep"
     assert run.answer is not None and run.answer.text.startswith("It was")
+    assert [(c.file, c.index) for c in run.answer.citations] == [("a.docx", 0)]
     assert run.outcome == "cancelled" and run.error == "stopped by user"
     assert run.finished_at is not None
 
@@ -245,3 +247,13 @@ def test_version_one_files_still_load(tmp_path: Path) -> None:
     w.path.write_text(json.dumps(data), encoding="utf-8")
     run = load_results(w.path)
     assert run.format_version == 1 and run.grouping is None
+
+
+def test_an_answer_saved_before_citations_were_recorded_loads(tmp_path: Path) -> None:
+    w = _writer(tmp_path)
+    data = json.loads(w.path.read_text(encoding="utf-8"))
+    data["format_version"] = 3
+    data["answer"] = {"text": "t", "sources": "s", "uncited_claims": []}
+    w.path.write_text(json.dumps(data), encoding="utf-8")
+    run = load_results(w.path)
+    assert run.answer is not None and run.answer.citations == []

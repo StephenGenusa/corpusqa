@@ -48,6 +48,7 @@ from corpusqa.gui_backend.models import ModelListing, list_models
 from corpusqa.gui_backend.protocol import (
     CacheCountParams,
     ChatSendParams,
+    CitationOut,
     ConfigSaveParams,
     CostConfirmEvent,
     CostReplyParams,
@@ -833,6 +834,10 @@ class Server:
         return DoneEvent(
             failures=[*result.card_report.failed, *result.extraction_failures],
             answer=result.answer.text if result.answer is not None else None,
+            citations=[
+                CitationOut(rel_path=c.rel_path, index=c.index)
+                for c in (result.answer.citations if result.answer is not None else [])
+            ],
         )
 
     async def _preflight(self, config: AppConfig, tasks: list[TaskName]) -> None:

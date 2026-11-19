@@ -220,12 +220,28 @@ class CostConfirmEvent(_Strict):
     estimate: EstimateOut
 
 
+class CitationOut(_Strict):
+    """The finding an answer citation stands for.
+
+    Finding ``index`` of ``rel_path``, in the order its ``file_result``
+    event listed them.
+    """
+
+    rel_path: str
+    index: int
+
+
 class DoneEvent(_Strict):
-    """Ends every started run, exactly once."""
+    """Ends every started run, exactly once.
+
+    ``citations`` names the finding behind each citation in ``answer``, in
+    the order the citations appear.
+    """
 
     event: Literal["done"] = "done"
     failures: list[tuple[str, str]] = Field(default_factory=list)
     answer: str | None = None
+    citations: list[CitationOut] = Field(default_factory=list)
     cancelled: bool = False
     results_path: str | None = None
 

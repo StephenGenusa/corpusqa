@@ -276,6 +276,7 @@ def test_run_streams_progress_results_and_done(
         "event": "done",
         "failures": [],
         "answer": None,
+        "citations": [],
         "cancelled": False,
     }
 

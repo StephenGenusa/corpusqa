@@ -11,7 +11,7 @@ machine-checkable.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from corpusqa.config.schema import AppConfig, TaskName
 from corpusqa.llm.tasks import LLMTaskClient
@@ -35,11 +35,29 @@ class Evidence:
         number: 1-based citation number.
         rel_path: Source file path.
         finding: The underlying finding.
+        index: The finding's position in its file's extraction findings
+            (the order results files and ``file_result`` events list them),
+            so a citation can name exactly this finding; -1 when unknown.
     """
 
     number: int
     rel_path: str
     finding: Finding
+    index: int = -1
+
+
+@dataclass(frozen=True)
+class CiteRef:
+    """The finding one rendered citation stands for.
+
+    Attributes:
+        rel_path: Source file path.
+        index: Position of the finding in that file's findings (see
+            ``Evidence.index``).
+    """
+
+    rel_path: str
+    index: int
 
 
 @dataclass(frozen=True)
@@ -53,6 +71,10 @@ class CitedAnswer:
             after repair (surfaced, never silently dropped).
         resolved_cites: Citation numbers that resolved to evidence.
         unresolved_cites: Citation numbers that did not.
+        citations: The finding behind each rendered citation in ``text``,
+            in the order they appear. Several findings can share a file,
+            heading and page, so the rendered text alone cannot identify
+            one; readers use this to open the finding actually cited.
     """
 
     text: str
@@ -60,6 +82,7 @@ class CitedAnswer:
     uncited_claims: list[str]
     resolved_cites: int = 0
     unresolved_cites: int = 0
+    citations: list[CiteRef] = field(default_factory=list)
 
 
 def number_evidence(
@@ -79,8 +102,18 @@ def number_evidence(
     Returns:
         Numbered evidence in stable order.
     """
+    positions = {
+        id(finding): i
+        for _, result in results
+        for i, finding in enumerate(result.findings)
+    }
     return [
-        Evidence(number=n, rel_path=rel_path, finding=finding)
+        Evidence(
+            number=n,
+            rel_path=rel_path,
+            finding=finding,
+            index=positions.get(id(finding), -1),
+        )
         for n, (rel_path, finding) in enumerate(
             unique_relevant_findings(results), start=1
         )
@@ -171,7 +204,7 @@ def _clean_markdown(line: str) -> str:
 
 
 def resolve_citations(
-    answer: str, evidence: list[Evidence]
+    answer: str, evidence: list[Evidence], cited: list[Evidence] | None = None
 ) -> tuple[str, list[str], set[int], int, int]:
     """Replaces ``[n]`` markers with rendered citations and enforces coverage.
 
@@ -189,6 +222,8 @@ def resolve_citations(
     Args:
         answer: Model output containing numeric cites.
         evidence: The numbered evidence list.
+        cited: When given, receives the evidence behind each rendered
+            citation, in the order the citations appear in the text.
 
     Returns:
         ``(rendered_text, bad_sentences, used_numbers, resolved, unresolved)``
@@ -196,20 +231,23 @@ def resolve_citations(
     """
     by_number = {e.number: e for e in evidence}
     used: set[int] = set()
+    order: list[Evidence] = []
     counts = {"ok": 0, "bad": 0}
 
     def _sub(match: re.Match[str]) -> str:
         rendered: list[str] = []
-        seen: set[str] = set()  # collapse [n, n] / repeated references
+        seen: set[int] = set()  # collapse [n, n]
         for token in match.group(1).split(","):
             n = int(token)
             if n in by_number:
                 used.add(n)
                 counts["ok"] += 1
-                cite = render_cite(by_number[n])
-                if cite not in seen:
-                    seen.add(cite)
-                    rendered.append(cite)
+                # Distinct findings can render alike (same file, heading and
+                # page); each keeps its own citation so each can be opened.
+                if n not in seen:
+                    seen.add(n)
+                    rendered.append(render_cite(by_number[n]))
+                    order.append(by_number[n])
             else:
                 counts["bad"] += 1
                 rendered.append("[uncited]")
@@ -240,6 +278,8 @@ def resolve_citations(
         out_lines.append(_clean_markdown(" ".join(parts)))
 
     rendered_text = "\n".join(out_lines).strip()
+    if cited is not None:
+        cited.extend(order)
     return rendered_text, bad, used, counts["ok"], counts["bad"]
 
 
@@ -309,19 +349,21 @@ async def synthesize(
         block = await _hierarchical_reduce(question, evidence, budget_tokens, client)
 
     answer = await _synthesize_once(question, block, client)
-    text, bad, used, ok_n, bad_n = resolve_citations(answer, evidence)
+    cited: list[Evidence] = []
+    text, bad, used, ok_n, bad_n = resolve_citations(answer, evidence, cited)
     if bad:  # one repair round trip, then surface what remains
         repair = synth_prompt.SYSTEM + synth_prompt.REPAIR.format(
             max_number=len(evidence)
         )
         answer = await _synthesize_once(question, block, client, system=repair)
-        text, bad, used, ok_n, bad_n = resolve_citations(answer, evidence)
+        cited = []
+        text, bad, used, ok_n, bad_n = resolve_citations(answer, evidence, cited)
 
     # Guarantee a response. If the model returned nothing usable (e.g. an
     # over-window completion came back empty), assemble a grounded digest
     # straight from the evidence so findings are never silently dropped.
     if not text.strip():
-        text, used = _fallback_digest(evidence)
+        text, used, cited = _fallback_digest(evidence)
         bad, ok_n, bad_n = [], len(used), 0
 
     return CitedAnswer(
@@ -330,6 +372,7 @@ async def synthesize(
         uncited_claims=bad,
         resolved_cites=ok_n,
         unresolved_cites=bad_n,
+        citations=[CiteRef(e.rel_path, e.index) for e in cited],
     )
 
 
@@ -477,12 +520,14 @@ def _claims_digest(items: list[Evidence]) -> str:
     return " ".join(parts)
 
 
-def _fallback_digest(evidence: list[Evidence]) -> tuple[str, set[int]]:
+def _fallback_digest(
+    evidence: list[Evidence],
+) -> tuple[str, set[int], list[Evidence]]:
     """Assembles a grounded answer directly from evidence, no model involved.
 
     Used only when synthesis returns nothing usable, so the user always gets
     the extracted findings with their citations rather than a blank response.
-    Returns ``(rendered_text, used_numbers)``.
+    Returns ``(rendered_text, used_numbers, cited_in_order)``.
     """
     by_file: dict[str, list[Evidence]] = {}
     for item in evidence:
@@ -498,5 +543,6 @@ def _fallback_digest(evidence: list[Evidence]) -> tuple[str, set[int]]:
             claim = item.finding.claim.strip()
             if claim:
                 lines.append(f"- {claim} [{item.number}]")
-    text, _bad, used, _ok, _bad_n = resolve_citations("\n".join(lines), evidence)
-    return text, used
+    cited: list[Evidence] = []
+    text, _bad, used, _ok, _bad_n = resolve_citations("\n".join(lines), evidence, cited)
+    return text, used, cited

@@ -343,6 +343,30 @@
   }
 
   /**
+   * Row index for each citation, in order. `refs` names the finding behind
+   * each citation (`{rel_path, index}`: that file's finding `index`, as its
+   * results list them), which matters because several findings often share a
+   * file, heading and page. Used only when it has one entry per citation and
+   * the entry is for the cited file; otherwise (results saved before
+   * citations were recorded) the citation falls back to `matchCitation`.
+   * @param {Array<{relPath: string, heading: string|null, page: string|null}>} cites
+   * @param {Array<{rel_path: string, index: number}>|null|undefined} refs
+   * @param {Array<{rel_path: string, index?: number}>} rows
+   * @returns {number[]} row indices, -1 where nothing matches
+   */
+  function citationTargets(cites, refs, rows) {
+    const exact = Array.isArray(refs) && refs.length === cites.length;
+    return cites.map((cite, k) => {
+      const ref = exact ? refs[k] : null;
+      if (ref && ref.rel_path === cite.relPath) {
+        const idx = rows.findIndex((r) => r.rel_path === ref.rel_path && r.index === ref.index);
+        if (idx !== -1) return idx;
+      }
+      return matchCitation(cite, rows);
+    });
+  }
+
+  /**
    * Maps Python code-point offsets to JavaScript UTF-16 indices for `text`.
    *
    * Each astral-plane character (emoji, CJK Ext-B, math letters) is one code
@@ -420,5 +444,6 @@
     buildBlocks,
     parseCitations,
     matchCitation,
+    citationTargets,
   };
 });

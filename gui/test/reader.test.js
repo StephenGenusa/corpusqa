@@ -323,3 +323,32 @@ test('buildBlocks styles a phrase that runs across a line break', () => {
     { kind: 'text', text: ' here' },
   ]);
 });
+
+const { citationTargets } = require('../src/reader');
+
+test('citationTargets opens the finding each citation names', () => {
+  // Three findings in one file share a heading and page.
+  const rows = [
+    { rel_path: 'a.md', index: 0, heading_path: ['Ideas'], page_label: '3' },
+    { rel_path: 'a.md', index: 1, heading_path: ['Ideas'], page_label: '3' },
+    { rel_path: 'a.md', index: 2, heading_path: ['Ideas'], page_label: '3' },
+    { rel_path: 'b.md', index: 0, heading_path: [], page_label: null },
+  ];
+  const cite = { relPath: 'a.md', heading: 'Ideas', page: '3' };
+  const refs = [{ rel_path: 'a.md', index: 2 }, { rel_path: 'a.md', index: 1 }];
+  assert.deepEqual(citationTargets([cite, cite], refs, rows), [2, 1]);
+});
+
+test('citationTargets falls back when the references do not fit the citations', () => {
+  const rows = [
+    { rel_path: 'a.md', index: 0, heading_path: ['Ideas'], page_label: '3' },
+    { rel_path: 'a.md', index: 1, heading_path: ['Ideas'], page_label: '3' },
+  ];
+  const cite = { relPath: 'a.md', heading: 'Ideas', page: '3' };
+  // Older results: no references.
+  assert.deepEqual(citationTargets([cite, cite], [], rows), [0, 0]);
+  assert.deepEqual(citationTargets([cite], null, rows), [0]);
+  // A reference to another file, or to a finding that is not listed.
+  assert.deepEqual(citationTargets([cite], [{ rel_path: 'b.md', index: 1 }], rows), [0]);
+  assert.deepEqual(citationTargets([cite], [{ rel_path: 'a.md', index: 9 }], rows), [0]);
+});

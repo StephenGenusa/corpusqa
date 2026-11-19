@@ -28,8 +28,9 @@ from corpusqa.query.synthesizer import CitedAnswer
 
 _log = logging.getLogger("corpusqa.query")
 
-# 2: adds ``grouping``. 3: adds ``selection``. Older files still load.
-RESULTS_FORMAT_VERSION = 3
+# 2: adds ``grouping``. 3: adds ``selection``. 4: adds ``answer.citations``.
+# Older files still load.
+RESULTS_FORMAT_VERSION = 4
 RESULTS_DIR_NAME = "results"
 _SLUG_MAX = 60
 
@@ -81,19 +82,24 @@ class SavedFile(_Model):
     findings: list[SavedFinding] = Field(default_factory=list)
 
 
-class SavedAnswer(_Model):
-    """The synthesized answer, when synthesis ran."""
-
-    text: str
-    sources: str
-    uncited_claims: list[str] = Field(default_factory=list)
-
-
 class SavedHitRef(_Model):
     """A hit: finding ``index`` of the saved file ``file``."""
 
     file: str
     index: int
+
+
+class SavedAnswer(_Model):
+    """The synthesized answer, when synthesis ran.
+
+    ``citations`` names the finding behind each citation in ``text``, in
+    order (empty in files written before format 4).
+    """
+
+    text: str
+    sources: str
+    uncited_claims: list[str] = Field(default_factory=list)
+    citations: list[SavedHitRef] = Field(default_factory=list)
 
 
 class SavedGroup(_Model):
@@ -334,6 +340,9 @@ class ResultsWriter:
             text=answer.text,
             sources=answer.sources,
             uncited_claims=list(answer.uncited_claims),
+            citations=[
+                SavedHitRef(file=c.rel_path, index=c.index) for c in answer.citations
+            ],
         )
         self._write()
 

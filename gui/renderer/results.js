@@ -2,7 +2,7 @@
 
 import { h, clear, fmtInt, fileStem, styledText } from './dom.js';
 
-const { parseCitations, matchCitation, decodeEntities } = window.CorpusReader;
+const { parseCitations, citationTargets, decodeEntities } = window.CorpusReader;
 
 const byFile = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 
@@ -28,6 +28,7 @@ export class ResultsView {
     this.failures = [];
     this.selected = null;
     this.answerText = null;
+    this.answerCitations = null;
     clear(this.els.list);
     clear(this.els.answer);
     this.els.answer.hidden = true;
@@ -43,7 +44,9 @@ export class ResultsView {
     const findings = ev.findings
       .map((f, i) => ({ f, i }))
       .sort((a, b) => (a.f.start ?? Infinity) - (b.f.start ?? Infinity) || a.i - b.i)
-      .map(({ f }) => ({ ...f, rel_path: ev.rel_path }));
+      // `index`: the finding's place in the file's list, which answer
+      // citations refer to.
+      .map(({ f, i }) => ({ ...f, rel_path: ev.rel_path, index: i }));
     if (findings.length) {
       const next = [...this.groups.keys()].filter((k) => byFile(k, ev.rel_path) > 0).sort(byFile)[0];
       const before = next ? this.groups.get(next)[0].el : null;
@@ -55,7 +58,7 @@ export class ResultsView {
       this.rows = [...this.groups.keys()].sort(byFile).flatMap((k) => this.groups.get(k));
     }
     this._renderSummary();
-    if (this.answerText) this.setAnswer(this.answerText);
+    if (this.answerText) this.setAnswer(this.answerText, this.answerCitations);
   }
 
   _removeGroup(relPath) {
@@ -143,9 +146,15 @@ export class ResultsView {
     this.els.summary.textContent = text;
   }
 
-  /** Shows the synthesized answer; its citations select matching rows. */
-  setAnswer(text) {
+  /**
+   * Shows the synthesized answer; each citation selects the finding it cites.
+   * @param {string|null} text
+   * @param {Array<{rel_path: string, index: number}>|null} [citations] the
+   *   finding behind each citation, in order (absent in older results)
+   */
+  setAnswer(text, citations = null) {
     this.answerText = text;
+    this.answerCitations = citations;
     const { answer } = this.els;
     clear(answer);
     if (!text) {
@@ -154,14 +163,18 @@ export class ResultsView {
     }
     answer.append(h('h2', { class: 'answer-title', text: 'Answer' }));
     const paths = [...this.groups.keys()];
-    for (const para of text.split(/\n{2,}/)) {
+    const paras = text.split(/\n{2,}/).map((para) => parseCitations(para, paths));
+    const cites = paras.flat().filter((seg) => seg.kind === 'cite');
+    const targets = citationTargets(cites, citations, this.rows);
+    let k = 0;
+    for (const segs of paras) {
       const p = h('p');
-      for (const seg of parseCitations(para, paths)) {
+      for (const seg of segs) {
         if (seg.kind === 'text') {
           p.append(decodeEntities(seg.text));
           continue;
         }
-        const idx = matchCitation(seg, this.rows);
+        const idx = targets[k++];
         p.append(h('button', {
           type: 'button',
           class: seg.unverified ? 'cite cite-unverified' : 'cite',

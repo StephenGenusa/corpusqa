@@ -349,7 +349,10 @@ function showSavedRun(run, sources, path) {
     });
   }
   results.setFailures(failures);
-  if (run.answer) results.setAnswer(run.answer.text);
+  if (run.answer) {
+    results.setAnswer(run.answer.text,
+      (run.answer.citations || []).map((c) => ({ rel_path: c.file, index: c.index })));
+  }
   state.resultsPath = path;
   docs.load(run.corpus, run.selection ?? null).then((missing) => {
     if (missing.length) {
@@ -654,7 +657,7 @@ function onDone(ev) {
   if (ev.results_path) state.resultsPath = ev.results_path;
   updateTools();
   results.setFailures(ev.failures);
-  if (ev.answer) results.setAnswer(ev.answer);
+  if (ev.answer) results.setAnswer(ev.answer, ev.citations || null);
   const n = results.rows.length;
   if (ev.cancelled) setStatus(`Cancelled after ${elapsed}`);
   else if (state.runError) setStatus(`Stopped with an error after ${elapsed}`);
